@@ -1,0 +1,190 @@
+{
+  "_meta": {
+    "last_scan": "2026-05-15",
+    "scan_time": "2026-05-15 14:44:00",
+    "index_change": -1.26,
+    "version": "3.0"
+  },
+  "etfs": {
+    "sh588000": {
+      "name": "科创50ETF",
+      "policy": 21,
+      "category": "科技成长",
+      "_breakdown": {
+        "base": 12,
+        "tech": 8,
+        "strength": 1
+      }
+    },
+    "sh512480": {
+      "name": "半导体ETF",
+      "policy": 28,
+      "category": "半导体",
+      "_breakdown": {
+        "base": 15,
+        "tech": 8,
+        "strength": 5
+      }
+    },
+    "sh515880": {
+      "name": "通信ETF",
+      "policy": 21,
+      "category": "通信",
+      "_breakdown": {
+        "base": 15,
+        "tech": 6,
+        "strength": 0
+      }
+    },
+    "sz159766": {
+      "name": "旅游ETF",
+      "policy": 7,
+      "category": "旅游",
+      "_breakdown": {
+        "base": 4,
+        "tech": 2,
+        "strength": 1
+      }
+    },
+    "sh515120": {
+      "name": "创新药ETF",
+      "policy": 16,
+      "category": "创新药",
+      "_breakdown": {
+        "base": 13,
+        "tech": 0,
+        "strength": 3
+      }
+    },
+    "sz159851": {
+      "name": "金融科技",
+      "policy": 11,
+      "category": "金融科技",
+      "_breakdown": {
+        "base": 6,
+        "tech": 4,
+        "strength": 1
+      }
+    },
+    "sh512880": {
+      "name": "证券ETF",
+      "policy": 7,
+      "category": "证券",
+      "_breakdown": {
+        "base": 3,
+        "tech": 4,
+        "strength": 0
+      }
+    },
+    "sz159915": {
+      "name": "创业板ETF",
+      "policy": 23,
+      "category": "科技成长",
+      "_breakdown": {
+        "base": 12,
+        "tech": 8,
+        "strength": 3
+      }
+    },
+    "sh515030": {
+      "name": "新能车ETF",
+      "policy": 22,
+      "category": "新能车",
+      "_breakdown": {
+        "base": 10,
+        "tech": 5,
+        "strength": 7
+      }
+    },
+    "sz159755": {
+      "name": "电池ETF",
+      "policy": 15,
+      "category": "电池",
+      "_breakdown": {
+        "base": 8,
+        "tech": 2,
+        "strength": 5
+      }
+    },
+    "sh515220": {
+      "name": "煤炭ETF",
+      "policy": 19,
+      "category": "煤炭",
+      "_breakdown": {
+        "base": 9,
+        "tech": 3,
+        "strength": 7
+      }
+    },
+    "sh516150": {
+      "name": "稀土ETF",
+      "policy": 20,
+      "category": "稀土",
+      "_breakdown": {
+        "base": 12,
+        "tech": 5,
+        "strength": 3
+      }
+    },
+    "sh512400": {
+      "name": "有色ETF",
+      "policy": 14,
+      "category": "有色",
+      "_breakdown": {
+        "base": 11,
+        "tech": 3,
+        "strength": 0
+      }
+    },
+    "sh516020": {
+      "name": "化工ETF",
+      "policy": 17,
+      "category": "化工",
+      "_breakdown": {
+        "base": 9,
+        "tech": 1,
+        "strength": 7
+      }
+    },
+    "sh512690": {
+      "name": "酒ETF",
+      "policy": 7,
+      "category": "酒",
+      "_breakdown": {
+        "base": 6,
+        "tech": 1,
+        "strength": 0
+      }
+    },
+    "sh513180": {
+      "name": "恒生科技",
+      "policy": 10,
+      "category": "港股科技",
+      "_breakdown": {
+        "base": 5,
+        "tech": 5,
+        "strength": 0
+      }
+    },
+    "sh515790": {
+      "name": "光伏ETF",
+      "policy": 12,
+      "category": "光伏",
+      "_breakdown": {
+        "base": 6,
+        "tech": 6,
+        "strength": 0
+      }
+    },
+    "sh512660": {
+      "name": "军工ETF",
+      "policy": 16,
+      "category": "国防安全",
+      "_breakdown": {
+        "base": 11,
+        "tech": 5,
+        "strength": 0
+      }
+    }
+  }
+}

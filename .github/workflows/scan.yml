@@ -1,8 +1,6 @@
 name: DS波段扫描
 
 on:
-  schedule:
-    - cron: '50 6 * * 1-5'
   workflow_dispatch:
 
 jobs:

@@ -16,5 +16,39 @@ jobs:
       - name: 安装Python依赖
         run: pip install requests pandas akshare lxml beautifulsoup4
 
-      - name: 运行扫描
-        run: python ds_scanner.py
+      - name: 运行扫描并保存报告
+        run: python ds_scanner.py > report.txt 2>&1
+
+      - name: 发送邮件
+        run: |
+          REPORT=$(cat report.txt)
+          python3 - <<EOF
+          import smtplib
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+          import os
+
+          user = os.environ['EMAIL_USER']
+          password = os.environ['EMAIL_PASS']
+          to = os.environ['EMAIL_TO']
+
+          msg = MIMEMultipart()
+          msg['From'] = user
+          msg['To'] = to
+          msg['Subject'] = '📡 DS波段扫描报告'
+
+          with open('report.txt', 'r', encoding='utf-8') as f:
+              body = f.read()
+
+          msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+          with smtplib.SMTP_SSL('smtp.126.com', 465) as server:
+              server.login(user, password)
+              server.send_message(msg)
+
+          print("✅ 邮件发送成功")
+          EOF
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}

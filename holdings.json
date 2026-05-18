@@ -1,0 +1,46 @@
+{
+  "cash_available": 183354.09,
+  "holdings": [
+    {
+      "symbol": "sh512400",
+      "qty": 0,
+      "cost": 2.201,
+      "buy_date": "2026-05-06",
+      "wave_type": "",
+      "is_reduced": "",
+      "_comment": " - "
+    },
+    {
+      "symbol": "sh515790",
+      "qty": 0,
+      "cost": 1.148,
+      "buy_date": "2026-05-13",
+      "wave_type": "",
+      "_comment": "酒ETF - 当前持仓，wave_type留空自动推断"
+    },
+    {
+      "symbol": "sh513180",
+      "qty": 0,
+      "cost": 0.648,
+      "buy_date": "2026-05-14",
+      "wave_type": "",
+      "_comment": "酒ETF - 当前持仓，wave_type留空自动推断"
+    },
+    {
+      "symbol": "sh512660",
+      "qty": 0,
+      "cost": 1.424,
+      "buy_date": "2026-04-20",
+      "wave_type": "",
+      "_comment": "酒ETF - 当前持仓，wave_type留空自动推断"
+    },
+    {
+      "symbol": "sh516150",
+      "qty": 0,
+      "cost": 2.038,
+      "buy_date": "2026-04-20",
+      "wave_type": "",
+      "_comment": "酒ETF - 当前持仓，wave_type留空自动推断"
+    }
+  ]
+}

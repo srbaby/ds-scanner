@@ -1,39 +1,39 @@
 {
   "_meta": {
-    "last_scan": "2026-05-15",
-    "scan_time": "2026-05-15 14:44:00",
-    "index_change": -1.26,
+    "last_scan": "2026-05-18",
+    "scan_time": "2026-05-18 14:54:04",
+    "index_change": -0.59,
     "version": "3.0"
   },
   "etfs": {
     "sh588000": {
       "name": "科创50ETF",
-      "policy": 21,
+      "policy": 24,
       "category": "科技成长",
       "_breakdown": {
         "base": 12,
-        "tech": 8,
-        "strength": 1
+        "tech": 5,
+        "strength": 7
       }
     },
     "sh512480": {
       "name": "半导体ETF",
-      "policy": 28,
+      "policy": 27,
       "category": "半导体",
       "_breakdown": {
         "base": 15,
-        "tech": 8,
-        "strength": 5
+        "tech": 5,
+        "strength": 7
       }
     },
     "sh515880": {
       "name": "通信ETF",
-      "policy": 21,
+      "policy": 27,
       "category": "通信",
       "_breakdown": {
         "base": 15,
-        "tech": 6,
-        "strength": 0
+        "tech": 5,
+        "strength": 7
       }
     },
     "sz159766": {
@@ -42,8 +42,8 @@
       "category": "旅游",
       "_breakdown": {
         "base": 4,
-        "tech": 2,
-        "strength": 1
+        "tech": 3,
+        "strength": 0
       }
     },
     "sh515120": {
@@ -52,98 +52,98 @@
       "category": "创新药",
       "_breakdown": {
         "base": 13,
-        "tech": 0,
-        "strength": 3
+        "tech": 3,
+        "strength": 0
       }
     },
     "sz159851": {
       "name": "金融科技",
-      "policy": 11,
+      "policy": 15,
       "category": "金融科技",
       "_breakdown": {
         "base": 6,
         "tech": 4,
-        "strength": 1
+        "strength": 5
       }
     },
     "sh512880": {
       "name": "证券ETF",
-      "policy": 7,
+      "policy": 10,
       "category": "证券",
       "_breakdown": {
         "base": 3,
         "tech": 4,
-        "strength": 0
+        "strength": 3
       }
     },
     "sz159915": {
       "name": "创业板ETF",
-      "policy": 23,
+      "policy": 16,
       "category": "科技成长",
       "_breakdown": {
         "base": 12,
-        "tech": 8,
-        "strength": 3
+        "tech": 4,
+        "strength": 0
       }
     },
     "sh515030": {
       "name": "新能车ETF",
-      "policy": 22,
+      "policy": 17,
       "category": "新能车",
       "_breakdown": {
         "base": 10,
-        "tech": 5,
-        "strength": 7
+        "tech": 4,
+        "strength": 3
       }
     },
     "sz159755": {
       "name": "电池ETF",
-      "policy": 15,
+      "policy": 14,
       "category": "电池",
       "_breakdown": {
         "base": 8,
-        "tech": 2,
-        "strength": 5
+        "tech": 3,
+        "strength": 3
       }
     },
     "sh515220": {
       "name": "煤炭ETF",
-      "policy": 19,
+      "policy": 22,
       "category": "煤炭",
       "_breakdown": {
         "base": 9,
-        "tech": 3,
+        "tech": 6,
         "strength": 7
       }
     },
     "sh516150": {
       "name": "稀土ETF",
-      "policy": 20,
+      "policy": 16,
       "category": "稀土",
       "_breakdown": {
         "base": 12,
-        "tech": 5,
-        "strength": 3
+        "tech": 4,
+        "strength": 0
       }
     },
     "sh512400": {
       "name": "有色ETF",
-      "policy": 14,
+      "policy": 13,
       "category": "有色",
       "_breakdown": {
         "base": 11,
-        "tech": 3,
+        "tech": 2,
         "strength": 0
       }
     },
     "sh516020": {
       "name": "化工ETF",
-      "policy": 17,
+      "policy": 15,
       "category": "化工",
       "_breakdown": {
         "base": 9,
-        "tech": 1,
-        "strength": 7
+        "tech": 6,
+        "strength": 0
       }
     },
     "sh512690": {
@@ -152,8 +152,8 @@
       "category": "酒",
       "_breakdown": {
         "base": 6,
-        "tech": 1,
-        "strength": 0
+        "tech": 0,
+        "strength": 1
       }
     },
     "sh513180": {
@@ -172,18 +172,18 @@
       "category": "光伏",
       "_breakdown": {
         "base": 6,
-        "tech": 6,
-        "strength": 0
+        "tech": 5,
+        "strength": 1
       }
     },
     "sh512660": {
       "name": "军工ETF",
-      "policy": 16,
+      "policy": 15,
       "category": "国防安全",
       "_breakdown": {
         "base": 11,
-        "tech": 5,
-        "strength": 0
+        "tech": 3,
+        "strength": 1
       }
     }
   }

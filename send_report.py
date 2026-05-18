@@ -3,11 +3,12 @@ import os
 import sys
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 from datetime import datetime
 import akshare as ak
 
 def is_trade_day():
-    """检查今天是否是A股交易日"""
     try:
         today = datetime.now().strftime('%Y%m%d')
         trade_cal = ak.tool_trade_date_hist_sina()
@@ -24,65 +25,21 @@ def send_email(report_text):
 
     today = datetime.now().strftime('%Y-%m-%d')
 
-    html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  body {{ font-family: -apple-system, sans-serif; padding: 16px; background: #f5f5f5; }}
-  .container {{ background: white; border-radius: 12px; padding: 20px; max-width: 600px; margin: 0 auto; }}
-  h2 {{ color: #333; font-size: 18px; }}
-  .report-box {{ background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; 
-                 font-family: monospace; font-size: 12px; white-space: pre-wrap; 
-                 word-break: break-all; overflow-x: auto; }}
-  .copy-btn {{ display: block; width: 100%; padding: 12px; margin-top: 12px;
-               background: #007AFF; color: white; border: none; border-radius: 8px;
-               font-size: 16px; cursor: pointer; text-align: center; }}
-  .copy-btn:active {{ background: #0056CC; }}
-  .tip {{ color: #888; font-size: 12px; margin-top: 8px; text-align: center; }}
-</style>
-</head>
-<body>
-<div class="container">
-  <h2>📡 DS波段扫描报告 {today}</h2>
-  <div class="report-box" id="report">{report_text}</div>
-  <button class="copy-btn" onclick="copyReport()">📋 一键复制报告</button>
-  <p class="tip">复制后直接粘贴给 DeepSeek / Claude 分析</p>
-</div>
-<script>
-function copyReport() {{
-  const text = document.getElementById('report').innerText;
-  if (navigator.clipboard) {{
-    navigator.clipboard.writeText(text).then(() => {{
-      const btn = document.querySelector('.copy-btn');
-      btn.textContent = '✅ 已复制！';
-      setTimeout(() => btn.textContent = '📋 一键复制报告', 2000);
-    }});
-  }} else {{
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    const btn = document.querySelector('.copy-btn');
-    btn.textContent = '✅ 已复制！';
-    setTimeout(() => btn.textContent = '📋 一键复制报告', 2000);
-  }}
-}}
-</script>
-</body>
-</html>
-"""
-
-    msg = MIMEMultipart('alternative')
+    msg = MIMEMultipart()
     msg['From'] = user
     msg['To'] = to
     msg['Subject'] = f'📡 DS波段扫描 {today}'
 
-    msg.attach(MIMEText(html, 'html', 'utf-8'))
+    # 简短正文
+    body = f"DS波段扫描报告 {today}\n\n报告见附件，复制附件内容后粘贴给AI分析。"
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+    # 附件
+    attachment = MIMEBase('application', 'octet-stream')
+    attachment.set_payload(report_text.encode('utf-8'))
+    encoders.encode_base64(attachment)
+    attachment.add_header('Content-Disposition', f'attachment; filename="report_{today}.txt"')
+    msg.attach(attachment)
 
     with smtplib.SMTP_SSL('smtp.126.com', 465) as server:
         server.login(user, password)

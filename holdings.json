@@ -1,5 +1,5 @@
 {
-  "cash_available": 165054.80,
+  "cash_available": 137582.46,
   "holdings": [
     {
       "symbol": "sh515220",
@@ -11,10 +11,10 @@
       "_comment": " - "
     },
     {
-      "symbol": "sh515790",
-      "qty": 0,
-      "cost": 1.148,
-      "buy_date": "2026-05-13",
+      "symbol": "sh512480",
+      "qty": 12900,
+      "cost": 2.129,
+      "buy_date": "2026-05-19",
       "wave_type": "",
       "_comment": "酒ETF - 当前持仓，wave_type留空自动推断"
     },

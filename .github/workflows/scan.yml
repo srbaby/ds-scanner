@@ -16,6 +16,9 @@ jobs:
 
       - name: 运行扫描并保存报告
         run: python ds_scanner.py > report.txt 2>&1
+        env:
+          DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
       - name: 发送报告邮件
         run: python send_report.py

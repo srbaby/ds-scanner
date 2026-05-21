@@ -152,6 +152,55 @@ HEADERS = {'Referer': 'http://finance.sina.com.cn'}
 PROXIES = {"http": None, "https": None}
 
 # ============================================================
+# Gist 持久化配置（环境变量注入，本地不设置则自动降级本地文件）
+# ============================================================
+GIST_ID = os.environ.get('DS_SCANNER_GIST_ID', '')
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
+
+def _gist_headers() -> Dict:
+    if GITHUB_TOKEN:
+        return {'Authorization': f'token {GITHUB_TOKEN}', 'Content-Type': 'application/json'}
+    return {'Content-Type': 'application/json'}
+
+def _gist_get_file(filename: str) -> Optional[str]:
+    """从 Gist 读取指定文件内容，失败返回 None"""
+    if not GIST_ID:
+        return None
+    try:
+        r = requests.get(
+            f'https://api.github.com/gists/{GIST_ID}',
+            headers=_gist_headers(), proxies=PROXIES, timeout=10
+        )
+        if r.status_code == 200:
+            content = r.json().get('files', {}).get(filename, {}).get('content')
+            if content:
+                return content
+        else:
+            print(f"  ⚠️ Gist 读取失败: HTTP {r.status_code}")
+    except Exception as e:
+        print(f"  ⚠️ Gist 读取异常: {e}")
+    return None
+
+def _gist_put_file(filename: str, content: str) -> bool:
+    """将内容写回 Gist 指定文件，成功返回 True"""
+    if not GIST_ID or not GITHUB_TOKEN:
+        return False
+    try:
+        import json as _json
+        payload = _json.dumps({'files': {filename: {'content': content}}})
+        r = requests.patch(
+            f'https://api.github.com/gists/{GIST_ID}',
+            headers=_gist_headers(), data=payload, proxies=PROXIES, timeout=10
+        )
+        if r.status_code == 200:
+            return True
+        else:
+            print(f"  ⚠️ Gist 写入失败: HTTP {r.status_code}")
+    except Exception as e:
+        print(f"  ⚠️ Gist 写入异常: {e}")
+    return False
+
+# ============================================================
 # 配置文件加载（三级兜底机制）
 # ============================================================
 
@@ -470,19 +519,53 @@ def refresh_etf_pool(base_scores: Dict, index_change: float):
         'etfs': etf_pool
     }
     
-    with open('etf_pool.json', 'w', encoding='utf-8') as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
-    
+    _save_etf_pool(output)
+
     print(" 完成!")
     print(f"✅ 已更新{len(etf_pool)}个ETF的policy分数")
     return etf_pool
 
 
+def _save_etf_pool(data: dict):
+    """保存 etf_pool：本地文件 + Gist（如已配置）"""
+    # 写本地文件
+    with open('etf_pool.json', 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    # 同步写 Gist
+    if GIST_ID and GITHUB_TOKEN:
+        content = json.dumps(data, ensure_ascii=False, indent=2)
+        ok = _gist_put_file('etf_pool.json', content)
+        if ok:
+            print("✅ etf_pool 已同步到 Gist")
+
+
 def load_etf_pool():
+    """读取 etf_pool：Gist > 本地文件 > 空"""
+    # 优先从 Gist 读
+    if GIST_ID:
+        raw = _gist_get_file('etf_pool.json')
+        if raw:
+            try:
+                data = json.loads(raw)
+                print("✅ etf_pool 已从 Gist 读取")
+                # 同步写本地缓存
+                with open('etf_pool.json', 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                return data.get('etfs', {})
+            except Exception as e:
+                print(f"  ⚠️ Gist 内容解析失败: {e}，降级本地文件")
+
+    # 降级：本地文件
     if os.path.exists('etf_pool.json'):
-        with open('etf_pool.json', 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        try:
+            with open('etf_pool.json', 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            print("✅ etf_pool 已从本地文件读取")
             return data.get('etfs', {})
+        except Exception as e:
+            print(f"  ⚠️ 本地 etf_pool.json 读取失败: {e}")
+
     return {}
 
 

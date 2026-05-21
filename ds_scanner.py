@@ -43,7 +43,8 @@ SYSTEM_NAME = "X-DeepSeek 波段验证系统"
 METHODOLOGY_DESC = "价值波段 Value-Swing"
 
 os.environ['TZ'] = 'Asia/Shanghai'
-time.tzset()
+if hasattr(time, 'tzset'):
+    time.tzset()
 
 # 禁用代理
 for k in ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY']:

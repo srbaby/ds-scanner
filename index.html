@@ -546,7 +546,10 @@
   <div class="max-w">
     <div class="section-header">
       <div class="section-title">ACTIVE POSITIONS</div>
-      <div class="badge" id="holdings-badge">0</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div class="badge" id="holdings-badge">0</div>
+        <button onclick="downloadHoldings()" style="background:transparent;border:1px solid var(--border);color:var(--text2);border-radius:6px;font-family:var(--mono);font-size:10px;padding:3px 9px;cursor:pointer;letter-spacing:0.05em;" title="下载 holdings.json">↓ JSON</button>
+      </div>
     </div>
     <div id="holdings-list"></div>
   </div>
@@ -950,6 +953,21 @@ async function saveCard(idx) {
   holdingsData.holdings[idx].buy_date = date;
   renderAll();
   await saveData();
+}
+
+// ============================================================
+// 下载 holdings.json
+// ============================================================
+function downloadHoldings() {
+  const ordered = { cash_available: holdingsData.cash_available, holdings: holdingsData.holdings };
+  const content = JSON.stringify(ordered, null, 2);
+  const blob = new Blob([content], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'holdings.json';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ============================================================

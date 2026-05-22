@@ -15,7 +15,10 @@ jobs:
         run: pip install requests pandas akshare lxml beautifulsoup4
 
       - name: 运行扫描并保存报告
-        run: python ds_scanner.py > report.txt 2>&1
+        run: |
+          python ds_scanner.py
+          echo "--- report.txt 前20行 ---"
+          head -20 report.txt
         env:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}

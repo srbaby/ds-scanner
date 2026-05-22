@@ -1003,7 +1003,11 @@ def main(force_refresh=False):
         etf_list = scan_etf_pool(etf_pool, holding_symbols, market['realtime'])
         
         report = generate_report_v2(market, etf_list, holdings_data, wave_cards, total_value, cash_available)
-        
+
+        with open('report.txt', 'w', encoding='utf-8') as f:
+            f.write(report)
+        print("✅ report.txt 已写入")
+
         print("\n" + "=" * 80)
         print(report)
         print("=" * 80)

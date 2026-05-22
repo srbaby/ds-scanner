@@ -260,24 +260,37 @@ def generate_base_config_template():
 def load_holdings():
     """
     加载持仓配置
-    优先级：JSON文件 > 硬编码默认值
+    优先级：Gist > 本地文件 > 硬编码默认值
     """
     config_file = 'holdings.json'
-    
+
+    # 优先从 Gist 读
+    if GIST_ID:
+        raw = _gist_get_file('holdings.json')
+        if raw:
+            try:
+                config = json.loads(raw)
+                print("✅ holdings 已从 Gist 读取")
+                # 同步写本地缓存
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, ensure_ascii=False, indent=2)
+                return config
+            except Exception as e:
+                print(f"  ⚠️ Gist holdings 解析失败: {e}，降级本地文件")
+
+    # 降级：本地文件
     if os.path.exists(config_file):
         try:
             with open(config_file, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-            print(f"✅ 使用 {config_file} 配置")
+            print(f"✅ 使用本地 {config_file} 配置")
             return config
         except Exception as e:
             print(f"⚠️ 读取 {config_file} 失败: {e}")
-            print("💡 使用硬编码持仓配置")
-            return DEFAULT_HOLDINGS
-    else:
-        print("💡 使用硬编码持仓配置")
-        generate_holdings_template()
-        return DEFAULT_HOLDINGS
+
+    print("💡 使用硬编码持仓配置")
+    generate_holdings_template()
+    return DEFAULT_HOLDINGS
 
 
 def generate_holdings_template():

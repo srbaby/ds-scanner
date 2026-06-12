@@ -23,9 +23,7 @@ jobs:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
-      - name: 发送报告邮件
+      - name: Bark推送报告
         run: python send_report.py
         env:
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          BARK_KEY: ${{ secrets.BARK_KEY }}

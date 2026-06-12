@@ -1,4 +1,4 @@
-// Cloudflare Worker：定时触发 X_Python 的 GitHub Actions 扫描（scan.yml）
+// Cloudflare Worker：定时触发 X-Plan 的 GitHub Actions 扫描（scan.yml）
 // 替代 iOS 快捷指令手动触发。盲触发即可：send_report.py 非交易日自动跳过。
 //
 // 需要配置（Worker → 设置 → 变量和机密）：

@@ -21,6 +21,9 @@ X-Plan AI自动复核模块（阶段1：Gemini）
 - Gemini 3.x官方建议移除 temperature/top_p/top_k（用模型默认值，推理能力针对
   默认值优化），本模块已不设置；默认开启 thinking_level=high（该模型免费层
   支持的最高推理等级），追求分析质量优先。
+- thinking_level=high时，思考token与正文共用 maxOutputTokens 预算，不显式设置
+  可能导致正文被截断（finishReason=MAX_TOKENS）；本模块显式设为该模型上限
+  65536兜底，仍命中时会在正文末尾附加截断提示，便于在看板上直接发现。
 
 环境变量：
   GEMINI_API_KEY        必填，Google AI Studio 申请的免费API Key
@@ -103,7 +106,9 @@ def call_gemini(report_text: str) -> Dict:
     )
 
     # Gemini 3.x官方建议不传temperature/top_p/top_k，用模型默认值
-    generation_config: Dict = {}
+    # thinking token会占用maxOutputTokens预算，显式设为模型上限避免高思考等级
+    # 把正文挤没（实测已出现：3.5-flash输出片段缺失，疑似MAX_TOKENS截断）
+    generation_config: Dict = {"maxOutputTokens": 65536}
     if GEMINI_THINKING_LEVEL:
         generation_config["thinkingConfig"] = {
             "thinkingLevel": GEMINI_THINKING_LEVEL.upper()
@@ -149,14 +154,16 @@ def call_gemini(report_text: str) -> Dict:
             }
         parts = candidates[0].get("content", {}).get("parts", [])
         text = "".join(p.get("text", "") for p in parts).strip()
+        finish_reason = candidates[0].get("finishReason", "UNKNOWN")
         if not text:
-            finish_reason = candidates[0].get("finishReason", "UNKNOWN")
             return {
                 "ok": False,
                 "model": GEMINI_MODEL,
                 "text": "",
                 "error": f"返回内容为空，finishReason={finish_reason}",
             }
+        if finish_reason == "MAX_TOKENS":
+            text += "\n\n⚠️ 系统提示：本次回复因达到MAX_TOKENS被截断，内容可能不完整。"
         return {"ok": True, "model": GEMINI_MODEL, "text": text, "error": None}
     except Exception as e:
         return {"ok": False, "model": GEMINI_MODEL, "text": "", "error": f"解析响应失败: {e}"}

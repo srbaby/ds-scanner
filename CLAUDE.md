@@ -1,6 +1,6 @@
 # CLAUDE.md — DS波段扫描系统（规格 + AI操作引导）
 
-X-DeepSeek 波段验证系统，基于"价值波段 Value-Swing"方法论，每日尾盘扫描ETF池，生成四维评分报告并推送至邮件，由 Cloudflare Worker 定时触发（交易日北京 14:49）。
+X-DeepSeek 波段验证系统，基于"价值波段 Value-Swing"方法论，每日尾盘扫描ETF池，生成四维评分报告并通过 Bark 推送（全文塞body），由 Cloudflare Worker 定时触发（交易日北京 14:49）。
 
 > **方法论版本：** v2.6（2026-03-17）
 > **系统版本：** ds_scanner v3.0
@@ -38,7 +38,7 @@ GitHub Actions（scan.yml）
     └─ 生成 report.txt
     ▼
 send_report.py
-    └─ 邮件推送 report.txt 附件
+    └─ Bark推送 report.txt 全文（body，POST JSON，badge红点+icon）
     ▼
 DeepSeek / Gemini 四维评分分析
     └─ 人工决策 → 14:55-15:00 执行
@@ -51,7 +51,7 @@ DeepSeek / Gemini 四维评分分析
 | 文件                   | 说明                                                         | 维护方式                 |
 | ---------------------- | ------------------------------------------------------------ | ------------------------ |
 | `ds_scanner.py`        | 主扫描脚本 v3.0                                              | 手动迭代                 |
-| `send_report.py`       | 邮件推送脚本（非交易日自动跳过）                             | 手动迭代                 |
+| `send_report.py`       | Bark推送脚本（非交易日自动跳过，report.txt全文塞body，POST避免URL长度限制；APNs单条payload约4KB上限，超长可能截断——已知风险，按选择全文优先） | 手动迭代                 |
 | `etf_base_config.json` | 板块政策基础分（0-15分），低频手动维护                       | 手动，重大政策事件后更新 |
 | `etf_base_config/`     | base分评分指南与提示词（GEMINI_UPDATE_GUIDE / PROMPT_FOR_GEMINI） | 低频手动                 |
 | `index.html`           | 持仓管理网页，访问 stock.bailuzun.com                        | 手动迭代                 |
@@ -90,13 +90,11 @@ DeepSeek / Gemini 四维评分分析
 
 ## 环境变量（GitHub Actions Secrets）
 
-| 变量名               | 说明                                      |
-| -------------------- | ----------------------------------------- |
-| `DS_SCANNER_GIST_ID` | Gist ID（32位）                           |
-| `GITHUB_TOKEN`       | 有 gist scope 的 PAT，Secret名为 `GH_PAT` |
-| `EMAIL_USER`         | 发件邮箱（126.com）                       |
-| `EMAIL_PASS`         | 邮箱授权码                                |
-| `EMAIL_TO`           | 收件邮箱                                  |
+| 变量名               | 说明                                                         |
+| -------------------- | ------------------------------------------------------------ |
+| `DS_SCANNER_GIST_ID` | Gist ID（32位）                                              |
+| `GITHUB_TOKEN`       | 有 gist scope 的 PAT，Secret名为 `GH_PAT`                    |
+| `BARK_KEY`           | Bark App 推送key（不带 `https://api.day.app/` 前缀，与fund-monitor同一套） |
 
 ---
 
@@ -202,7 +200,7 @@ strength分：ETF涨跌幅相对沪深300的超额强度(0-7)
 
 ```
 14:49  Cloudflare Worker 自动触发 Actions（cron: 49 6 * * MON-FRI，UTC）
-~14:53 收到邮件报告，复制附件内容发给 DeepSeek/Gemini
+~14:53 收到Bark推送（带badge红点），长按通知复制全文发给 DeepSeek/Gemini
 ~14:55 AI输出持仓指令 + 新机会评分，人工决策确认
 14:55-15:00  尾盘执行
 收盘后  更新 holdings.json（stock.bailuzun.com）
@@ -269,6 +267,7 @@ python3 ds_scanner.py --refresh-policy
 
 | 版本                 | 日期       | 核心变更                                                     |
 | -------------------- | ---------- | ------------------------------------------------------------ |
+| 通知方式v2           | 2026-06-12 | 邮件推送 → Bark推送（report.txt全文塞body，POST JSON，badge红点+icon）；移除EMAIL_*三个secrets，新增BARK_KEY；send_report.py改造，scan.yml同步更新 |
 | 文档合并             | 2026-06-11 | SPEC.md 并入 CLAUDE.md，单文件维护                           |
 | 触发方式v2           | 2026-06-11 | iOS快捷指令 → Cloudflare Worker 定时触发（北京14:49交易日），实测分钟级准时；手机端自动化已删除 |
 | ds_scanner v3.0      | 2026-05    | 动态止盈拦截、is_reduced状态记忆、Gist持久化                 |

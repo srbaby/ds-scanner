@@ -16,12 +16,18 @@ X-Plan AI自动复核模块（阶段1：Gemini）
 - 本模块只负责"调用AI、拿到文本"，不做展示，不做Gist读写。
 - 方法论文本不在本文件重复抄写，运行时直接读取 X-Plan.md，
   避免和canonical文档产生第二份拷贝（CLAUDE.md卫生要求）。
-- 模型可通过环境变量 GEMINI_MODEL 切换（默认 gemini-2.5-flash），
+- 模型可通过环境变量 GEMINI_MODEL 切换（默认 gemini-3.5-flash，免费层可用），
   方便后续和手动 Gemini Pro / DeepSeek 做质量对比。
+- Gemini 3.x官方建议移除 temperature/top_p/top_k（用模型默认值，推理能力针对
+  默认值优化），本模块已不设置；默认开启 thinking_level=high（该模型免费层
+  支持的最高推理等级），追求分析质量优先。
 
 环境变量：
-  GEMINI_API_KEY  必填，Google AI Studio 申请的免费API Key
-  GEMINI_MODEL    可选，默认 gemini-2.5-flash
+  GEMINI_API_KEY        必填，Google AI Studio 申请的免费API Key
+  GEMINI_MODEL          可选，默认 gemini-3.5-flash
+  GEMINI_THINKING_LEVEL 可选，默认 high（minimal/low/medium/high，控制推理深度/成本，
+                        high=免费层可用的最高等级）；切回2.x系列模型需清空此变量
+                        （2.x不支持thinkingLevel字段，会返回400）
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -33,7 +39,8 @@ import requests
 PROXIES = {"http": None, "https": None}
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_THINKING_LEVEL = os.environ.get("GEMINI_THINKING_LEVEL", "high")
 
 # 与 ds_scanner.py 同级目录的上一层（X-Plan/ 根目录）
 METHODOLOGY_FILE = os.path.join(
@@ -95,10 +102,17 @@ def call_gemini(report_text: str) -> Dict:
         f"{methodology}"
     )
 
+    # Gemini 3.x官方建议不传temperature/top_p/top_k，用模型默认值
+    generation_config: Dict = {}
+    if GEMINI_THINKING_LEVEL:
+        generation_config["thinkingConfig"] = {
+            "thinkingLevel": GEMINI_THINKING_LEVEL.upper()
+        }
+
     payload = {
         "system_instruction": {"parts": [{"text": system_instruction}]},
         "contents": [{"role": "user", "parts": [{"text": report_text}]}],
-        "generationConfig": {"temperature": 0.3},
+        "generationConfig": generation_config,
     }
 
     url = GEMINI_API_URL.format(model=GEMINI_MODEL)
@@ -154,7 +168,8 @@ if __name__ == "__main__":
     with open("report.txt", "r", encoding="utf-8") as f:
         report = f.read()
 
-    print(f"🤖 调用 Gemini ({GEMINI_MODEL}) ...")
+    thinking_note = f", thinking={GEMINI_THINKING_LEVEL}" if GEMINI_THINKING_LEVEL else ""
+    print(f"🤖 调用 Gemini ({GEMINI_MODEL}{thinking_note}) ...")
     result = call_gemini(report)
     if result["ok"]:
         print("✅ 分析成功\n")

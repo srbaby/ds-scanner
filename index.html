@@ -6,6 +6,7 @@
 <link rel="icon" href="favicon.png" />
 <link rel="apple-touch-icon" href="favicon.png" />
 <title>Stock Management</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
 
@@ -485,6 +486,119 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .max-w { max-width: 480px; margin: 0 auto; }
+
+  /* 信号徽章（AI分析中的止损/开仓提示） */
+  .signal-badge {
+    display: none;
+    margin-top: 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .signal-badge.danger { color: var(--danger); border-color: var(--danger); background: rgba(255,71,87,0.08); }
+  .signal-badge.warn { color: var(--warn); border-color: var(--warn); background: rgba(255,165,2,0.08); }
+
+  /* AI分析 / 原始扫描数据 折叠区 */
+  .info-section {
+    margin: 0 12px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .info-section summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    background: var(--surface2);
+  }
+  .info-section summary::-webkit-details-marker { display: none; }
+  .info-section summary::after {
+    content: '▾';
+    color: var(--text2);
+    transition: transform 0.2s;
+    flex-shrink: 0;
+  }
+  .info-section[open] summary::after { transform: rotate(180deg); }
+  .info-section .info-meta {
+    font-size: 11px;
+    color: var(--text2);
+    font-weight: 400;
+    letter-spacing: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .info-section .info-body {
+    padding: 14px;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+  .info-section.ai-err summary { color: var(--danger); }
+
+  /* markdown 渲染样式（AI分析 / report原文） */
+  .markdown-body h1, .markdown-body h2, .markdown-body h3 {
+    color: var(--accent);
+    margin: 14px 0 8px;
+    line-height: 1.4;
+  }
+  .markdown-body h1 { font-size: 17px; }
+  .markdown-body h2 { font-size: 15px; }
+  .markdown-body h3 { font-size: 14px; }
+  .markdown-body p { margin: 6px 0; }
+  .markdown-body strong { color: var(--text); }
+  .markdown-body ul, .markdown-body ol { margin: 6px 0 6px 20px; }
+  .markdown-body li { margin: 3px 0; }
+  .markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+  .markdown-body code {
+    font-family: var(--mono);
+    background: var(--surface2);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 12px;
+  }
+  .markdown-body table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 14px;
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+  .markdown-body th, .markdown-body td {
+    border: 1px solid var(--border);
+    padding: 5px 8px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  .markdown-body th {
+    background: var(--surface2);
+    color: var(--text2);
+  }
+  .markdown-body blockquote {
+    border-left: 3px solid var(--border);
+    padding-left: 10px;
+    color: var(--text2);
+    margin: 8px 0;
+  }
+  .error-box {
+    color: var(--danger);
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.8;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
 </style>
 </head>
 <body>
@@ -540,6 +654,7 @@
         <div class="overview-stat-val" id="display-sync">—</div>
       </div>
     </div>
+    <div class="signal-badge" id="signal-badge"></div>
   </div>
 
   <!-- 持仓列表 -->
@@ -552,6 +667,23 @@
       </div>
     </div>
     <div id="holdings-list"></div>
+  </div>
+
+  <!-- AI分析（干货：最终买卖指令，默认展开） + 原始扫描数据（默认折叠） -->
+  <div class="max-w">
+    <details class="info-section" id="ai-section" open>
+      <summary>🤖 今日AI分析<span class="info-meta" id="ai-meta">—</span></summary>
+      <div class="info-body markdown-body" id="ai-body">
+        <div class="empty-state">// 暂无今日AI分析数据</div>
+      </div>
+    </details>
+
+    <details class="info-section" id="report-section">
+      <summary>📡 原始扫描数据（report.txt）</summary>
+      <div class="info-body markdown-body" id="report-body">
+        <div class="empty-state">// 暂无扫描数据</div>
+      </div>
+    </details>
   </div>
 
   <!-- FAB -->
@@ -631,7 +763,7 @@ for (const [full, name] of Object.entries(ETF_POOL)) {
 // ============================================================
 // 状态
 // ============================================================
-let TOKEN = '', GIST_ID = '', holdingsData = {};
+let TOKEN = '', GIST_ID = '', holdingsData = {}, dashboardData = null;
 
 // ============================================================
 // 初始化
@@ -683,6 +815,7 @@ async function loadData() {
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const gist = await r.json();
+
     const raw = gist.files?.['holdings.json']?.content;
     if (!raw) throw new Error('Gist 中没有 holdings.json');
     holdingsData = JSON.parse(raw);
@@ -690,9 +823,14 @@ async function loadData() {
     if (!holdingsData.holdings) holdingsData.holdings = [];
     if (!holdingsData.cash_available) holdingsData.cash_available = 0;
 
+    // AI看板数据（同一个Gist，可能尚未生成）
+    const rawDashboard = gist.files?.['dashboard.json']?.content;
+    dashboardData = rawDashboard ? JSON.parse(rawDashboard) : null;
+
     document.getElementById('auth-screen').style.display = 'none';
     document.getElementById('main-screen').style.display = 'block';
     renderAll();
+    renderDashboard(dashboardData);
     setStatus('已同步', 'ok');
     document.getElementById('display-sync').textContent = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
   } catch(e) {
@@ -796,6 +934,64 @@ function renderAll() {
 function toggleEdit(idx) {
   const el = document.getElementById(`edit-${idx}`);
   el.classList.toggle('open');
+}
+
+// ============================================================
+// AI分析看板（dashboard.json：干货=AI回复全文，原始数据折叠）
+// ============================================================
+function renderDashboard(data) {
+  const aiSection = document.getElementById('ai-section');
+  const aiMeta    = document.getElementById('ai-meta');
+  const aiBody    = document.getElementById('ai-body');
+  const reportSection = document.getElementById('report-section');
+  const reportBody    = document.getElementById('report-body');
+  const signalEl  = document.getElementById('signal-badge');
+
+  if (!data) {
+    aiSection.classList.remove('ai-err');
+    aiMeta.textContent = '—';
+    aiBody.innerHTML = '<div class="empty-state">// 暂无今日AI分析数据</div>';
+    reportBody.innerHTML = '<div class="empty-state">// 暂无扫描数据</div>';
+    signalEl.style.display = 'none';
+    return;
+  }
+
+  const ai = data.ai || {};
+  aiMeta.textContent = [data.generated_at, data.methodology_version, ai.model]
+    .filter(Boolean).join(' · ') || '—';
+
+  if (ai.ok && ai.text) {
+    aiSection.classList.remove('ai-err');
+    aiBody.innerHTML = marked.parse(ai.text);
+    reportSection.open = false; // 干货已展示，原始数据默认折叠
+  } else {
+    aiSection.classList.add('ai-err');
+    aiBody.innerHTML = `<div class="error-box">⚠️ AI分析失败：${escapeHtml(ai.error || '未知错误')}\n\n请展开下方「原始扫描数据」，手动复制给Gemini/DeepSeek网页版分析。</div>`;
+    reportSection.open = true; // AI失败兜底：自动展开原始数据
+  }
+
+  reportBody.innerHTML = marked.parse(data.report || '(无数据)');
+
+  // 信号徽章：粗略关键词匹配，仅做视觉提示
+  const fullText = (data.report || '') + (ai.text || '');
+  if (/止损|逻辑止损|价格止损|时间止损/.test(fullText)) {
+    signalEl.textContent = '⚠️ 含止损相关提示，请重点查看';
+    signalEl.className = 'signal-badge danger';
+    signalEl.style.display = 'inline-block';
+  } else if (/评分\s*[≥>]\s*75|强烈买入|可以买入/.test(fullText)) {
+    signalEl.textContent = '🎯 含开仓信号，请重点查看';
+    signalEl.className = 'signal-badge warn';
+    signalEl.style.display = 'inline-block';
+  } else {
+    signalEl.style.display = 'none';
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 // ============================================================

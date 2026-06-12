@@ -220,7 +220,7 @@ def load_base_scores():
     加载板块基础分配置
     优先级：JSON文件 > 硬编码默认值
     """
-    config_file = "etf_base_config.json"
+    config_file = "data/etf_base_config.json"
 
     if os.path.exists(config_file):
         try:
@@ -258,9 +258,9 @@ def generate_base_config_template():
     }
 
     try:
-        with open("etf_base_config.json", "w", encoding="utf-8") as f:
+        with open("data/etf_base_config.json", "w", encoding="utf-8") as f:
             json.dump(template, f, ensure_ascii=False, indent=2)
-        print("📄 已生成 etf_base_config.json 模板，后续可自行修改")
+        print("📄 已生成 data/etf_base_config.json 模板，后续可自行修改")
     except Exception as e:
         print(f"⚠️ 生成模板失败: {e}")
 
@@ -270,7 +270,7 @@ def load_holdings():
     加载持仓配置
     优先级：Gist > 本地文件 > 硬编码默认值
     """
-    config_file = "holdings.json"
+    config_file = "data/holdings.json"
 
     # 优先从 Gist 读
     if GIST_ID:
@@ -319,20 +319,20 @@ def generate_holdings_template():
     }
 
     try:
-        with open("holdings.json", "w", encoding="utf-8") as f:
+        with open("data/holdings.json", "w", encoding="utf-8") as f:
             json.dump(template, f, ensure_ascii=False, indent=2)
-        print("📄 已生成 holdings.json 模板，请填入实际持仓")
+        print("📄 已生成 data/holdings.json 模板，请填入实际持仓")
     except Exception as e:
         print(f"⚠️ 生成模板失败: {e}")
 
 
 def should_refresh_policy():
     """判断是否需要刷新policy分数"""
-    if not os.path.exists("etf_pool.json"):
+    if not os.path.exists("data/etf_pool.json"):
         return True, "首次运行，全量扫描"
 
     try:
-        with open("etf_pool.json", "r", encoding="utf-8") as f:
+        with open("data/etf_pool.json", "r", encoding="utf-8") as f:
             data = json.load(f)
             last_scan = data.get("_meta", {}).get("last_scan", "1970-01-01")
             days_ago = (datetime.now() - datetime.strptime(last_scan, "%Y-%m-%d")).days
@@ -570,7 +570,7 @@ def refresh_etf_pool(base_scores: Dict, index_change: float):
 def _save_etf_pool(data: dict):
     """保存 etf_pool：本地文件 + Gist（如已配置）"""
     # 写本地文件
-    with open("etf_pool.json", "w", encoding="utf-8") as f:
+    with open("data/etf_pool.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
     # 同步写 Gist
@@ -591,21 +591,21 @@ def load_etf_pool():
                 data = json.loads(raw)
                 print("✅ etf_pool 已从 Gist 读取")
                 # 同步写本地缓存
-                with open("etf_pool.json", "w", encoding="utf-8") as f:
+                with open("data/etf_pool.json", "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 return data.get("etfs", {})
             except Exception as e:
                 print(f"  ⚠️ Gist 内容解析失败: {e}，降级本地文件")
 
     # 降级：本地文件
-    if os.path.exists("etf_pool.json"):
+    if os.path.exists("data/etf_pool.json"):
         try:
-            with open("etf_pool.json", "r", encoding="utf-8") as f:
+            with open("data/etf_pool.json", "r", encoding="utf-8") as f:
                 data = json.load(f)
             print("✅ etf_pool 已从本地文件读取")
             return data.get("etfs", {})
         except Exception as e:
-            print(f"  ⚠️ 本地 etf_pool.json 读取失败: {e}")
+            print(f"  ⚠️ 本地 data/etf_pool.json 读取失败: {e}")
 
     return {}
 

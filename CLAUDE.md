@@ -109,13 +109,14 @@ index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
 
 ## 环境变量（GitHub Actions Secrets）
 
-| 变量名                 | 说明                                                         |
-| ---------------------- | ------------------------------------------------------------ |
-| `DS_SCANNER_GIST_ID`   | Gist ID（32位）                                              |
-| `GITHUB_TOKEN`         | 有 gist scope 的 PAT，Secret名为 `GH_PAT`                    |
-| `BARK_KEY`             | Bark App 推送key（不带 `https://api.day.app/` 前缀，与fund-monitor同一套） |
-| `GEMINI_API_KEY`       | Google AI Studio 免费API Key，`generate_dashboard.py`用      |
-| `GEMINI_MODEL`（可选） | 默认`gemini-2.5-flash`；不配置则用默认值，用于后续切换模型对比质量 |
+| 变量名                          | 说明                                                         |
+| ------------------------------- | ------------------------------------------------------------ |
+| `DS_SCANNER_GIST_ID`            | Gist ID（32位）                                              |
+| `GITHUB_TOKEN`                  | 有 gist scope 的 PAT，Secret名为 `GH_PAT`                    |
+| `BARK_KEY`                      | Bark App 推送key（不带 `https://api.day.app/` 前缀，与fund-monitor同一套） |
+| `GEMINI_API_KEY`                | Google AI Studio 免费API Key，`generate_dashboard.py`用      |
+| `GEMINI_MODEL`（可选）          | 默认`gemini-3.5-flash`（免费层可用）；不配置则用默认值，用于后续切换模型对比质量 |
+| `GEMINI_THINKING_LEVEL`（可选） | 默认`high`（minimal/low/medium/high，控制推理深度/成本，high=免费层最高等级）；仅3.x系列支持，切回2.x模型需清空 |
 
 ---
 

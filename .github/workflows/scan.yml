@@ -23,6 +23,15 @@ jobs:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
+      - name: Gemini自动分析并写入看板
+        run: python automation/generate_dashboard.py
+        env:
+          DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        # 失败不阻塞后续Bark推送（report原文优先）
+        continue-on-error: true
+
       - name: Bark推送报告
         run: python automation/send_report.py
         env:

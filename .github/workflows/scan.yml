@@ -16,7 +16,7 @@ jobs:
 
       - name: 运行扫描并保存报告
         run: |
-          python ds_scanner.py
+          python automation/ds_scanner.py
           echo "--- report.txt 前20行 ---"
           head -20 report.txt
         env:
@@ -24,6 +24,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
       - name: Bark推送报告
-        run: python send_report.py
+        run: python automation/send_report.py
         env:
           BARK_KEY: ${{ secrets.BARK_KEY }}

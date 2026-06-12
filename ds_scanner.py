@@ -954,6 +954,8 @@ def scan_holdings_with_wave_management(
 
         wave_cards.append(
             {
+                "symbol": code.replace("sh", "").replace("sz", ""),
+                "price": price,
                 "name": h["name"],
                 "wave_type": h["wave_type"],
                 "emoji": emoji,
@@ -1122,9 +1124,9 @@ def generate_report_v2(
             else:
                 policy_display = f"🟢 {ps}分（安全）"
 
-            report.append(f"### 📍 {card['name']} ({card['wave_type']})\n")
+            report.append(f"### 📍 {card['symbol']} {card['name']} ({card['wave_type']})\n")
             report.append(f"**波段状态:** {card['emoji']} {card['phase_desc']}")
-            report.append(f"**当前盈亏:** {profit_emoji} {card['profit_pct']:+.2f}%")
+            report.append(f"**当前盈亏:** {profit_emoji} {card['profit_pct']:+.2f}% | 现价 {card['price']:.3f}")
             report.append(
                 f"**买入信息:** ⭐{card['buy_score']}分 | 📝 {card['buy_reason']}"
             )
@@ -1136,16 +1138,6 @@ def generate_report_v2(
             report.append(f"**动态止盈价:** 📈 {card['stop_loss']:.3f}\n")
     else:
         report.append("- 💤 当前无持仓\n")
-
-    report.append("---\n## 📦 持仓状态\n")
-    if holdings_data:
-        for h in holdings_data:
-            profit_emoji = "📈" if h["profit_pct"] > 0 else "📉"
-            report.append(
-                f"**{h['symbol']} {h['name']}:** {profit_emoji} 现价{h['price']:.3f} | 盈亏{h['profit_pct']:+.2f}% | ⏳ 持仓{h['days']}天 | 🏷️ {h['wave_type']} | {h['emoji']} {h['phase']}\n"
-            )
-    else:
-        report.append("- 💤 空仓\n")
 
     report.append("\n## 📊 扫描数据（原始数据）\n")
     report.append(

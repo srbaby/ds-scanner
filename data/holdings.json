@@ -1,0 +1,13 @@
+{
+  "cash_available": 155535.07,
+  "holdings": [
+    {
+      "symbol": "sh512480",
+      "qty": 12900,
+      "cost": 2.13,
+      "buy_date": "2026-05-19",
+      "wave_type": "",
+      "is_reduced": false
+    }
+  ]
+}

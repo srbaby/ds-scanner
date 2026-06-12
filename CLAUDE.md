@@ -210,16 +210,5 @@ python3 automation/ds_scanner.py --refresh-policy
 
 | 版本                    | 日期       | 核心变更                                                     |
 | ----------------------- | ---------- | ------------------------------------------------------------ |
-| 前端合一                | 2026-06-12 | `index.html`与`dashboard.html`合并为单页：持仓管理置顶，🤖今日AI分析（干货=Gemini标准回复格式全文，含止损/开仓信号徽章）默认展开于持仓下方，📡report原文默认折叠（AI分析失败时自动展开兜底）；删除`dashboard.html`，同步更新`X-Plan.md`模块1执行流程描述、`generate_dashboard.py`文档字符串及本文件架构图/文件说明/前端页面/每日流程。**需push到ds-scanner仓库后生效** |
-| 文档去重+方法论文档修订 | 2026-06-12 | ① CLAUDE.md剥离全部规则摘要（Policy评分/开仓/止损止盈/仓位/熔断/转实盘六节），替换为速查索引，消除双真理源；② `X-Plan.md`自动化适配修订（规则无变更）：扫描器policy分实现迁入附录A、澄清"逻辑止损触发器=policy总分<15"与四维评分"政策催化30分"双口径、模块1/5/10改写为自动化架构、价格止损执行口径统一（盘中跌破立即清仓）、版本历史精简至2条；③canonical文件`X-Plan_v2.6.md`重命名为`X-Plan.md`（版本号移入文件内部头部，避免后续方法论升级需改文件名+全项目引用）。**需push到ds-scanner仓库后才对线上AI分析生效** |
-| AI自动分析v1（阶段1）   | 2026-06-12 | 找回并复位方法论正本`X-Plan.md`（canonical）；新增`automation/ai_review.py`+`generate_dashboard.py`：每日尾盘自动调用Gemini API（默认gemini-2.5-flash，免费）按方法论分析report.txt，结果写入Gist `dashboard.json`；新增`dashboard.html`看板（左report原文/右Gemini分析，止损/开仓信号高亮），与index.html共用Gist认证；新增Secret `GEMINI_API_KEY`；Bark推送逻辑不变（仍推report全文，作为AI分析失败时的人工兜底）；后续DeepSeek接入/三栏对比/通知冗余见`automation/优化备忘.md` |
-| 通知方式v2              | 2026-06-12 | 邮件推送 → Bark推送（report.txt全文塞body，POST JSON，badge红点+icon）；移除EMAIL_*三个secrets，新增BARK_KEY；send_report.py改造，scan.yml同步更新 |
-| 报告精简                | 2026-06-12 | 合并"🎯持仓波段管理卡"与"📦持仓状态"两个冗余区块（字段1:1对应），卡片标题加代码、当前盈亏行加现价；为Bark全文塞body的~4KB上限省空间，AI判断逻辑（波段管理卡字段）不受影响 |
-| 目录重构                | 2026-06-12 | 本地镜像目录从 X_Python 改名为 X-Plan；scan.yml → .github/workflows/scan.yml（与真实仓库路径一致）；cf_worker_trigger.js → automation/cf_worker_trigger.js（命名习惯对齐基金看板项目）；二阶段：ds_scanner.py/send_report.py → automation/，etf_pool.json/holdings.json/etf_base_config.json/etf_base_config/ → data/（路径字面量已同步改写，Gist API文件名不受影响）；index.html/favicon.png 等保持根目录不动（GH Pages路径耦合） |
-| 文档合并                | 2026-06-11 | SPEC.md 并入 CLAUDE.md，单文件维护                           |
-| 触发方式v2              | 2026-06-11 | iOS快捷指令 → Cloudflare Worker 定时触发（北京14:49交易日），实测分钟级准时；手机端自动化已删除 |
-| ds_scanner v3.0         | 2026-05    | 动态止盈拦截、is_reduced状态记忆、Gist持久化                 |
-| 方法论 v2.6             | 2026-03-17 | 废除闪电战止损，重构为逻辑+价格+时间三道防线，时间止损延长至21天 |
-| 方法论 v2.5             | 2026-03-02 | 量比定义统一，三方（Claude+Gemini+DeepSeek）审计定稿         |
-| 方法论 v2.4             | 2026-02-24 | 废弃左轮，独尊右轮，新增三道金牌                             |
-| etf_base_config v3.1    | 2026-05-13 | 政治局会议+中美峰会修正：通信/稀土/储能上调                  |
+| 前端合一                | 2026-06-12 | `index.html`与`dashboard.html`合并为单页：持仓管理置顶，🤖今日AI分析（干货=Gemini标准回复格式全文，含止损/开仓信号徽章）默认展开于持仓下方，📡report原文默认折叠（AI分析失败时自动展开兜底）；删除`dashboard.html`，同步更新`X-Plan.md`模块1执行流程描述、`generate_dashboard.py`文档字符串及本文件架构图/文件说明/前端页面/每日流程 |
+| 文档去重+方法论文档修订 | 2026-06-12 | ① CLAUDE.md剥离全部规则摘要（Policy评分/开仓/止损止盈/仓位/熔断/转实盘六节），替换为速查索引，消除双真理源；② `X-Plan.md`自动化适配修订（规则无变更）：扫描器policy分实现迁入附录A、澄清"逻辑止损触发器=policy总分<15"与四维评分"政策催化30分"双口径、模块1/5/10改写为自动化架构、价格止损执行口径统一（盘中跌破立即清仓）、版本历史精简至2条；③canonical文件`X-Plan_v2.6.md`重命名为`X-Plan.md`（版本号移入文件内部头部，避免后续方法论升级需改文件名+全项目引用） |

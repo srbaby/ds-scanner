@@ -21,7 +21,12 @@ def is_trade_day():
 
 
 def send_bark(report_text):
-    bark_key = os.environ['BARK_KEY']
+    keys = [os.environ['BARK_KEY']]
+    # 老婆的推送Key（可选，配置后同步推送）
+    wife_key = os.environ.get('BARK_KEY_WIFE', '').strip()
+    if wife_key:
+        keys.append(wife_key)
+
     today = datetime.now().strftime('%Y-%m-%d')
 
     # 全文塞body（不做截断/中转），便于直接在Bark App长按复制给DeepSeek/Gemini。
@@ -36,15 +41,16 @@ def send_bark(report_text):
         "icon": BARK_ICON,
     }
 
-    r = requests.post(
-        f"https://api.day.app/{bark_key}",
-        headers={"Content-Type": "application/json; charset=utf-8"},
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        timeout=30,
-    )
-    print(f"Bark推送 -> {r.status_code}: {r.text}")
-    r.raise_for_status()
-    print("✅ Bark推送成功")
+    for key in keys:
+        r = requests.post(
+            f"https://api.day.app/{key}",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            timeout=30,
+        )
+        print(f"Bark推送({key[:8]}…) -> {r.status_code}: {r.text}")
+        r.raise_for_status()
+    print(f"✅ Bark推送成功（共{len(keys)}个接收方）")
 
 
 if __name__ == '__main__':

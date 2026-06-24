@@ -730,6 +730,23 @@
 </div>
 
 <script>
+// 新增：利用腾讯接口跨境网络获取股票/ETF真实名称
+function fetchOnlineName(symbol, callback) {
+  const script = document.createElement('script');
+  script.src = `https://qt.gtimg.cn/q=${symbol.toLowerCase()}`;
+  script.onload = () => {
+    try {
+      const varName = `v_${symbol.toLowerCase()}`;
+      if (window[varName]) {
+        const parts = window[varName].split('~');
+        if (parts && parts[1]) callback(parts[1]); // parts[1] 就是中文名称
+      }
+    } catch (e) { console.error(e); }
+    script.remove();
+  };
+  document.body.appendChild(script);
+}
+
 // ============================================================
 // ETF 池（与 ds_scanner.py 保持一致）
 // ============================================================
@@ -899,7 +916,7 @@ function renderAll() {
           <div style="font-size:9px;color:var(--text2);text-align:center;margin-top:2px;font-family:var(--mono)">${prefix}</div>
         </div>
         <div class="card-info">
-          <div class="card-name">${name}${reduced}</div>
+          <div class="card-name" id="name-${fullIdx}">${name}${reduced}</div>
           <div class="card-meta">${h.qty.toLocaleString()} 份 · 成本 ${h.cost} · ${h.buy_date}</div>
         </div>
         <div class="card-actions">
@@ -930,6 +947,22 @@ function renderAll() {
     </div>`;
   }).join('');
 }
+
+// ─── 🛑 新增：对不在本地池子（CODE_MAP）里的标的，启动全自动在线查名 ───
+  active.forEach(h => {
+    const fullIdx = holdingsData.holdings.indexOf(h);
+    const digits = h.symbol.replace(/\D/g, '');
+    if (!CODE_MAP[digits]) {
+      fetchOnlineName(h.symbol, (onlineName) => {
+        const nameEl = document.getElementById(`name-${fullIdx}`);
+        if (nameEl) {
+          const reduced = h.is_reduced ? ' <span style="color:var(--warn);font-size:10px">减仓</span>' : '';
+          nameEl.innerHTML = onlineName + reduced;
+        }
+      });
+    }
+  });
+  // ──────────────────────────────────────────────────────────────────
 
 function toggleEdit(idx) {
   const el = document.getElementById(`edit-${idx}`);

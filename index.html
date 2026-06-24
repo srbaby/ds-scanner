@@ -1072,16 +1072,25 @@ async function addHolding() {
   if (isNaN(cost) || cost <= 0) { toast('成本价无效', 'error'); return; }
   if (!date) { toast('请选择日期', 'error'); return; }
 
-  // 解析完整代码
+// 解析完整代码（支持智能判别沪深前缀与自动纠错）
   let symbol = document.getElementById('new-symbol').dataset.fullCode || '';
   if (!symbol) {
-    const digits = rawSym.replace(/^(sh|sz)/i, '');
-    if (CODE_MAP[digits]) {
-      symbol = CODE_MAP[digits].full;
-    } else if (/^(sh|sz)\d{6}$/i.test(rawSym)) {
-      symbol = rawSym.toLowerCase();
+    const digits = rawSym.replace(/\D/g, ''); // 提取纯6位数字
+    if (digits.length === 6) {
+      if (CODE_MAP[digits]) {
+        symbol = CODE_MAP[digits].full; // 优先匹配已有可转债/ETF池
+      } else if (/^(60|65|68|50|51|52|56|58)/.test(digits)) {
+        symbol = 'sh' + digits;        // 上海主板、科创板、上海基金ETF（自动纠正类似 sz588800 的错误）
+      } else if (/^(00|30|15|16|18)/.test(digits)) {
+        symbol = 'sz' + digits;        // 深圳主板、创业板、深圳基金ETF
+      } else if (/^(43|83|87|88)/.test(digits)) {
+        symbol = 'bj' + digits;        // 北交所
+      } else {
+        // 兜底：如果无法识别，看用户有没有手动输入前缀
+        symbol = (/^(sh|sz)/i.test(rawSym) ? rawSym.toLowerCase() : 'sh' + digits);
+      }
     } else {
-      toast('代码不在池内，请输入完整代码如 sh512480', 'error');
+      toast('请输入正确的6位证券代码', 'error');
       return;
     }
   }

@@ -874,6 +874,17 @@ def scan_holdings_with_wave_management(
             continue
 
         code = h["symbol"]
+        
+        # ─── 🛑 新增：自动修复错误的 sh/sz 前缀防御机制 ───
+        digits = "".join(filter(str.isdigit, code))
+        if len(digits) == 6:
+            if digits.startswith(('60', '65', '68', '50', '51', '52', '56', '58')):
+                code = 'sh' + digits
+            elif digits.startswith(('00', '30', '15', '16', '18')):
+                code = 'sz' + digits
+            h["symbol"] = code  # 同步修正内存中的数据，确保后续链路完全正确
+        # ────────────────────────────────────────────────
+        
         price = (
             realtime[code]["price"]
             if code in realtime

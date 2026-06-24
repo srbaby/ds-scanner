@@ -1,7 +1,11 @@
 name: DS波段扫描
 
+# 定时触发已全面迁移至 Cloudflare Worker 内网服务绑定通道（Master-Scheduler ➔ ds-scan-trigger）
+# 本工作流支持：CF Worker 自动远程唤醒 / 手机 GitHub App 手动触发
 on:
-  workflow_dispatch:
+  workflow_dispatch:           # 手动触发入口
+  repository_dispatch:         # ✨ 新增：对接项目二 Worker 的内网穿透安全触发
+    types: [scan]
 
 jobs:
   scan:
@@ -10,6 +14,12 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+
+      - name: 设置 Python 环境并启用缓存  # ✨ 新增：规范 Python 环境并开启依赖缓存
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip' # 第二次运行起，下面这堆沉重的重型库将秒级闪电加载
 
       - name: 安装Python依赖
         run: pip install requests pandas akshare lxml beautifulsoup4

@@ -946,9 +946,8 @@ function renderAll() {
       </div>
     </div>`;
   }).join('');
-}
 
-// ─── 🛑 新增：对不在本地池子（CODE_MAP）里的标的，启动全自动在线查名 ───
+  // ─── ✅ 移动到这里：必须在 renderAll 函数内部执行 ───
   active.forEach(h => {
     const fullIdx = holdingsData.holdings.indexOf(h);
     const digits = h.symbol.replace(/\D/g, '');
@@ -962,7 +961,7 @@ function renderAll() {
       });
     }
   });
-  // ──────────────────────────────────────────────────────────────────
+} // <─── 注意！这个大括号必须在最后面，用来闭合 renderAll 函数
 
 function toggleEdit(idx) {
   const el = document.getElementById(`edit-${idx}`);

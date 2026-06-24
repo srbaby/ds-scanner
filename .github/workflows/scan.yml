@@ -15,11 +15,15 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置 Python 环境并启用缓存  # ✨ 新增：规范 Python 环境并开启依赖缓存
+      - name: 设置 Python 环境并启用缓存
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: 'pip' # 第二次运行起，下面这堆沉重的重型库将秒级闪电加载
+          cache: 'pip'
+          # ✨ 新增：让缓存插件去扫描你的脚本文件，完美适配你的无依赖文件架构
+          cache-dependency-path: |
+            automation/ds_scanner.py
+            automation/generate_dashboard.py
 
       - name: 安装Python依赖
         run: pip install requests pandas akshare lxml beautifulsoup4

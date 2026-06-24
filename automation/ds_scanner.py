@@ -885,11 +885,13 @@ def scan_holdings_with_wave_management(
             h["symbol"] = code  # 同步修正内存中的数据，确保后续链路完全正确
         # ────────────────────────────────────────────────
         
-        price = (
-            realtime[code]["price"]
-            if code in realtime
-            else fetch_sina_realtime([code]).get(code, {}).get("price", 0)
-        )
+        # ─── ✅ 修正：如果不在实时行情池中，查到后立即补录，确保后续能拿到在线中文名 ───
+        if code not in realtime:
+            custom_rt = fetch_sina_realtime([code])
+            if code in custom_rt:
+                realtime[code] = custom_rt[code]
+
+        price = realtime.get(code, {}).get("price", 0)
         if price == 0:
             continue
 

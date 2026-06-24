@@ -903,6 +903,11 @@ def scan_holdings_with_wave_management(
         history = fetch_sina_history(code, 30)
         inferred = auto_infer_holding_info(h, history, holding_days)
         h.update(inferred)
+        
+        # ─── 🛑 新增：如果新浪接口查到了真实在线中文名，直接覆盖掉代码数字 ───
+        if code in realtime and realtime[code].get("name"):
+            h["name"] = realtime[code]["name"]
+        # ──────────────────────────────────────────────────────────────
 
         phase, emoji, phase_desc = identify_wave_status(holding_days, h["wave_type"])
 

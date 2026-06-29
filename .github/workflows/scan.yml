@@ -37,17 +37,16 @@ jobs:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
-      - name: Gemini Flash标准分析并写入看板
+      - name: DeepSeek Flash分析并写入看板
         run: python automation/generate_dashboard.py
         env:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-3.5-flash
-          GEMINI_THINKING_LEVEL: ""
-          GEMINI_MAX_OUTPUT_TOKENS: "8192"
-          GEMINI_RETRIES: "1"
-          GEMINI_RETRY_SLEEP_SECONDS: "20"
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: deepseek-v4-flash
+          DEEPSEEK_MAX_TOKENS: "8192"
+          DEEPSEEK_RETRIES: "1"
+          DEEPSEEK_RETRY_SLEEP_SECONDS: "20"
         # 失败不阻塞后续Bark推送（report原文优先）
         continue-on-error: true
 

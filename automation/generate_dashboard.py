@@ -7,27 +7,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-X-Plan 看板数据生成器（阶段1：Gemini自动分析）
+X-Plan 看板数据生成器（DeepSeek自动分析）
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 流程：
   1. 读取 report.txt（ds_scanner.py 刚生成的尾盘扫描报告）
-  2. 调用 ai_review.call_gemini() 做四维评分分析
-  3. 把 {report原文, Gemini分析, 元信息} 写入 Gist 的 dashboard.json
+  2. 调用 ai_review.call_deepseek() 做四维评分分析
+  3. 把 {report原文, DeepSeek分析, 元信息} 写入 Gist 的 dashboard.json
      （与 etf_pool.json / holdings.json 同一个私有 Gist，复用现有 Token/权限）
 
 index.html 前端读取 dashboard.json：AI分析全文（干货）默认展开，report原文默认折叠
 （AI分析失败时自动展开report原文作兜底）。
 
 失败处理：
-  - Gemini调用失败（额度/网络/被拦截）不阻塞流程，dashboard.json中ai.ok=false，
+  - DeepSeek调用失败（额度/网络/被拦截）不阻塞流程，dashboard.json中ai.ok=false，
     前端展示错误信息，report原文照常可见，Bark推送不受影响。
   - Gist未配置（本地调试）时，写入本地同名文件 dashboard.json 供检查。
 
 环境变量：
   DS_SCANNER_GIST_ID  必填（线上），与 ds_scanner.py 共用
   GITHUB_TOKEN        必填（线上），与 ds_scanner.py 共用（GH_PAT，需 gist 写权限）
-  GEMINI_API_KEY      必填，见 ai_review.py
-  GEMINI_MODEL        可选，见 ai_review.py
+  DEEPSEEK_API_KEY    必填，见 ai_review.py
+  DEEPSEEK_MODEL      可选，见 ai_review.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -37,7 +37,7 @@ from datetime import datetime
 
 import requests
 
-from ai_review import call_gemini, GEMINI_MODEL
+from ai_review import call_deepseek, DEEPSEEK_MODEL
 
 PROXIES = {"http": None, "https": None}
 
@@ -92,19 +92,19 @@ def main():
     with open("report.txt", "r", encoding="utf-8") as f:
         report_text = f.read()
 
-    print(f"🤖 调用 Gemini ({GEMINI_MODEL}) 分析中...")
-    result = call_gemini(report_text)
+    print(f"🤖 调用 DeepSeek ({DEEPSEEK_MODEL}) 分析中...")
+    result = call_deepseek(report_text)
     if result["ok"]:
-        print("✅ Gemini 分析完成")
+        print("✅ DeepSeek 分析完成")
     else:
-        print(f"⚠️ Gemini 分析失败（不影响report推送）: {result['error']}")
+        print(f"⚠️ DeepSeek 分析失败（不影响report推送）: {result['error']}")
 
     data = {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "methodology_version": METHODOLOGY_VERSION,
         "report": report_text,
         "ai": {
-            "provider": "gemini",
+            "provider": "deepseek",
             "model": result["model"],
             "ok": result["ok"],
             "text": result["text"],

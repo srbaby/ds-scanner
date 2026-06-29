@@ -7,7 +7,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-X-Plan AI自动复核模块（阶段1：Gemini）
+X-Plan AI自动复核模块（Gemini Flash标准档）
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 读取本目录 X-Plan.md（方法论 canonical）+ report.txt，
 调用 Gemini API 输出基于"三道金牌 + 四维评分 + 双防线止损"的分析。
@@ -16,25 +16,22 @@ X-Plan AI自动复核模块（阶段1：Gemini）
 - 本模块只负责"调用AI、拿到文本"，不做展示，不做Gist读写。
 - 方法论文本不在本文件重复抄写，运行时直接读取 X-Plan.md，
   避免和canonical文档产生第二份拷贝（CLAUDE.md卫生要求）。
-- 模型可通过环境变量 GEMINI_MODEL 切换（默认 gemini-3.5-flash，免费层可用），
-  方便后续和手动 Gemini Pro / DeepSeek 做质量对比。
-- Gemini 3.x官方建议移除 temperature/top_p/top_k（用模型默认值，推理能力针对
-  默认值优化），本模块已不设置；默认开启 thinking_level=high（该模型免费层
-  支持的最高推理等级），追求分析质量优先。
-- thinking_level=high时，思考token与正文共用 maxOutputTokens 预算，不显式设置
-  可能导致正文被截断（finishReason=MAX_TOKENS）；本模块显式设为该模型上限
-  65536兜底，仍命中时会在正文末尾附加截断提示，便于在看板上直接发现。
+- 模型可通过环境变量 GEMINI_MODEL 切换（默认 gemini-3.5-flash，免费层可用）。
+- 默认采用 Gemini Flash 标准调用：不设置 temperature/top_p/top_k，不开启
+  thinkingConfig，降低14:49高峰期触发繁忙/限流的概率。
+- 对 429/5xx 繁忙类错误做短等待重试，失败仍不阻塞 report 推送。
 
 环境变量：
   GEMINI_API_KEY        必填，Google AI Studio 申请的免费API Key
   GEMINI_MODEL          可选，默认 gemini-3.5-flash
-  GEMINI_THINKING_LEVEL 可选，默认 high（minimal/low/medium/high，控制推理深度/成本，
-                        high=免费层可用的最高等级）；切回2.x系列模型需清空此变量
-                        （2.x不支持thinkingLevel字段，会返回400）
+  GEMINI_THINKING_LEVEL 可选，默认空；仅明确设置时传 thinkingConfig
+  GEMINI_MAX_OUTPUT_TOKENS 可选，默认 8192
+  GEMINI_RETRIES        可选，默认 1；仅对繁忙类错误短等待重试
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import os
+import time
 from typing import Dict, Optional
 
 import requests
@@ -43,7 +40,10 @@ PROXIES = {"http": None, "https": None}
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
-GEMINI_THINKING_LEVEL = os.environ.get("GEMINI_THINKING_LEVEL", "high")
+GEMINI_THINKING_LEVEL = os.environ.get("GEMINI_THINKING_LEVEL", "")
+GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "8192"))
+GEMINI_RETRIES = int(os.environ.get("GEMINI_RETRIES", "1"))
+GEMINI_RETRY_SLEEP_SECONDS = int(os.environ.get("GEMINI_RETRY_SLEEP_SECONDS", "20"))
 
 # 与 ds_scanner.py 同级目录的上一层（X-Plan/ 根目录）
 METHODOLOGY_FILE = os.path.join(
@@ -105,10 +105,8 @@ def call_gemini(report_text: str) -> Dict:
         f"{methodology}"
     )
 
-    # Gemini 3.x官方建议不传temperature/top_p/top_k，用模型默认值
-    # thinking token会占用maxOutputTokens预算，显式设为模型上限避免高思考等级
-    # 把正文挤没（实测已出现：3.5-flash输出片段缺失，疑似MAX_TOKENS截断）
-    generation_config: Dict = {"maxOutputTokens": 65536}
+    # Gemini Flash标准档：只限制输出长度，不主动开启高思考等级。
+    generation_config: Dict = {"maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS}
     if GEMINI_THINKING_LEVEL:
         generation_config["thinkingConfig"] = {
             "thinkingLevel": GEMINI_THINKING_LEVEL.upper()
@@ -122,24 +120,36 @@ def call_gemini(report_text: str) -> Dict:
 
     url = GEMINI_API_URL.format(model=GEMINI_MODEL)
 
-    try:
-        r = requests.post(
-            url,
-            params={"key": GEMINI_API_KEY},
-            json=payload,
-            proxies=PROXIES,
-            timeout=120,
-        )
-    except Exception as e:
-        return {"ok": False, "model": GEMINI_MODEL, "text": "", "error": f"请求异常: {e}"}
+    last_error = ""
+    max_attempts = max(1, GEMINI_RETRIES + 1)
+    retryable_status = {429, 500, 502, 503, 504}
+    for attempt in range(1, max_attempts + 1):
+        try:
+            r = requests.post(
+                url,
+                params={"key": GEMINI_API_KEY},
+                json=payload,
+                proxies=PROXIES,
+                timeout=90,
+            )
+        except Exception as e:
+            last_error = f"请求异常: {e}"
+            if attempt < max_attempts:
+                time.sleep(GEMINI_RETRY_SLEEP_SECONDS)
+                continue
+            return {"ok": False, "model": GEMINI_MODEL, "text": "", "error": last_error}
 
-    if r.status_code != 200:
-        return {
-            "ok": False,
-            "model": GEMINI_MODEL,
-            "text": "",
-            "error": f"HTTP {r.status_code}: {r.text[:300]}",
-        }
+        if r.status_code == 200:
+            break
+
+        last_error = f"HTTP {r.status_code}: {r.text[:300]}"
+        if r.status_code in retryable_status and attempt < max_attempts:
+            time.sleep(GEMINI_RETRY_SLEEP_SECONDS)
+            continue
+        return {"ok": False, "model": GEMINI_MODEL, "text": "", "error": last_error}
+
+    if "r" not in locals():
+        return {"ok": False, "model": GEMINI_MODEL, "text": "", "error": last_error}
 
     try:
         data = r.json()
@@ -175,8 +185,12 @@ if __name__ == "__main__":
     with open("report.txt", "r", encoding="utf-8") as f:
         report = f.read()
 
-    thinking_note = f", thinking={GEMINI_THINKING_LEVEL}" if GEMINI_THINKING_LEVEL else ""
-    print(f"🤖 调用 Gemini ({GEMINI_MODEL}{thinking_note}) ...")
+    mode_note = (
+        f", thinking={GEMINI_THINKING_LEVEL}"
+        if GEMINI_THINKING_LEVEL
+        else ", standard"
+    )
+    print(f"🤖 调用 Gemini ({GEMINI_MODEL}{mode_note}) ...")
     result = call_gemini(report)
     if result["ok"]:
         print("✅ 分析成功\n")

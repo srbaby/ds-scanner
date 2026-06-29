@@ -487,20 +487,6 @@
 
   .max-w { max-width: 480px; margin: 0 auto; }
 
-  /* 信号徽章（AI分析中的止损/开仓提示） */
-  .signal-badge {
-    display: none;
-    margin-top: 10px;
-    font-family: var(--mono);
-    font-size: 11px;
-    font-weight: 700;
-    padding: 5px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-  }
-  .signal-badge.danger { color: var(--danger); border-color: var(--danger); background: rgba(255,71,87,0.08); }
-  .signal-badge.warn { color: var(--warn); border-color: var(--warn); background: rgba(255,165,2,0.08); }
-
   /* AI分析 / 原始扫描数据 折叠区 */
   .info-section {
     margin: 0 12px 12px;
@@ -654,7 +640,6 @@
         <div class="overview-stat-val" id="display-sync">—</div>
       </div>
     </div>
-    <div class="signal-badge" id="signal-badge"></div>
   </div>
 
   <!-- 持仓列表 -->
@@ -977,14 +962,11 @@ function renderDashboard(data) {
   const aiBody    = document.getElementById('ai-body');
   const reportSection = document.getElementById('report-section');
   const reportBody    = document.getElementById('report-body');
-  const signalEl  = document.getElementById('signal-badge');
-
   if (!data) {
     aiSection.classList.remove('ai-err');
     aiMeta.textContent = '—';
     aiBody.innerHTML = '<div class="empty-state">// 暂无今日AI分析数据</div>';
     reportBody.innerHTML = '<div class="empty-state">// 暂无扫描数据</div>';
-    signalEl.style.display = 'none';
     return;
   }
 
@@ -1003,20 +985,6 @@ function renderDashboard(data) {
   }
 
   reportBody.innerHTML = marked.parse(data.report || '(无数据)');
-
-  // 信号徽章：粗略关键词匹配，仅做视觉提示
-  const fullText = (data.report || '') + (ai.text || '');
-  if (/止损|逻辑止损|价格止损|时间止损/.test(fullText)) {
-    signalEl.textContent = '⚠️ 含止损相关提示，请重点查看';
-    signalEl.className = 'signal-badge danger';
-    signalEl.style.display = 'inline-block';
-  } else if (/评分\s*[≥>]\s*75|强烈买入|可以买入/.test(fullText)) {
-    signalEl.textContent = '🎯 含开仓信号，请重点查看';
-    signalEl.className = 'signal-badge warn';
-    signalEl.style.display = 'inline-block';
-  } else {
-    signalEl.style.display = 'none';
-  }
 }
 
 function escapeHtml(s) {

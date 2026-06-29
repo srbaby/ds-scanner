@@ -130,7 +130,7 @@ def call_gemini(report_text: str) -> Dict:
                 params={"key": GEMINI_API_KEY},
                 json=payload,
                 proxies=PROXIES,
-                timeout=90,
+                timeout=120,
             )
         except Exception as e:
             last_error = f"请求异常: {e}"

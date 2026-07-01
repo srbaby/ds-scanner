@@ -48,7 +48,7 @@ for (const [full, name] of Object.entries(ETF_POOL)) {
 // ============================================================
 // 状态
 // ============================================================
-let TOKEN = '', GIST_ID = '', holdingsData = {}, dashboardData = null;
+let TOKEN = '', GIST_ID = '', holdingsData = {}, dashboardData = null, gistETag = null;
 
 // ============================================================
 // 初始化
@@ -126,6 +126,7 @@ async function loadData() {
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const gist = await r.json();
+  gistETag = r.headers.get('ETag');
 
   const raw = gist.files?.['holdings.json']?.content;
   if (!raw) throw new Error('Gist 中没有 holdings.json');
@@ -148,7 +149,8 @@ async function saveData() {
       method: 'PATCH',
       headers: {
         Authorization: `token ${TOKEN}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        ...(gistETag ? { 'If-Match': gistETag } : {})
       },
       body: JSON.stringify({ files: { 'holdings.json': { content } } })
     });
@@ -182,8 +184,9 @@ function renderAll() {
 
   list.innerHTML = active.map((h, idx) => {
     const fullIdx = holdingsData.holdings.indexOf(h);
-    const info = CODE_MAP[h.symbol.slice(2)] || CODE_MAP[h.symbol];
-    const name = info ? info.name : h.symbol;
+    const digits = h.symbol.replace(/\D/g, '');
+    const poolName = CODE_MAP[digits]?.name;
+    const name = poolName || h.name || h.symbol;
     const displayCode = h.symbol.replace(/^(sh|sz)/, '');
     const prefix = h.symbol.startsWith('sh') ? 'SH' : 'SZ';
     const reduced = h.is_reduced ? ' <span style="color:var(--warn);font-size:10px">减仓</span>' : '';
@@ -230,19 +233,18 @@ function renderAll() {
     </div>`;
   }).join('');
 
-  // ─── ✅ 移动到这里：必须在 renderAll 函数内部执行 ───
+  // ─── 异步补全池外名称（仅对无名称的标的触发 JSONP） ───
   active.forEach(h => {
+    if (CODE_MAP[h.symbol.replace(/\D/g, '')]?.name || h.name) return;
     const fullIdx = holdingsData.holdings.indexOf(h);
-    const digits = h.symbol.replace(/\D/g, '');
-    if (!CODE_MAP[digits]) {
-      fetchOnlineName(h.symbol, (onlineName) => {
-        const nameEl = document.getElementById(`name-${fullIdx}`);
-        if (nameEl) {
-          const reduced = h.is_reduced ? ' <span style="color:var(--warn);font-size:10px">减仓</span>' : '';
-          nameEl.innerHTML = onlineName + reduced;
-        }
-      });
-    }
+    fetchOnlineName(h.symbol, (onlineName) => {
+      const nameEl = document.getElementById(`name-${fullIdx}`);
+      if (nameEl && onlineName) {
+        const reduced = h.is_reduced ? ' <span style="color:var(--warn);font-size:10px">减仓</span>' : '';
+        nameEl.innerHTML = onlineName + reduced;
+        h.name = onlineName;
+      }
+    });
   });
 } // <─── 注意！这个大括号必须在最后面，用来闭合 renderAll 函数
 
@@ -263,7 +265,9 @@ function renderDashboard(data) {
   if (!data) {
     aiSection.classList.remove('ai-err');
     aiSection.classList.remove('is-stale');
+    aiSection.classList.remove('is-fresh');
     reportSection.classList.remove('is-stale');
+    reportSection.classList.remove('is-fresh');
     aiMeta.textContent = '—';
     aiBody.innerHTML = '<div class="empty-state"><div class="empty-icon">🤖</div><div>暂无今日 AI 分析</div><div class="empty-hint">等待 dashboard.json 推送</div></div>';
     reportBody.innerHTML = '<div class="empty-state"><div class="empty-icon">📡</div><div>暂无扫描数据</div><div class="empty-hint">等待 report.txt 推送</div></div>';
@@ -274,15 +278,26 @@ function renderDashboard(data) {
   aiMeta.textContent = [data.generated_at, data.methodology_version, ai.model]
     .filter(Boolean).join(' · ') || '—';
 
-  // 数据过期判断：generated_at 距今超过 24 小时视为过时
+  // 数据过期判断：同日不标过期；周末对周五数据宽松；超过24h标记
   const isStale = (() => {
     if (!data.generated_at) return false;
     const t = new Date(data.generated_at.replace(' ', 'T'));
     if (isNaN(t)) return false;
-    return (Date.now() - t.getTime()) > 24 * 3600 * 1000;
+    const now = new Date();
+    // 同一自然日 → 不过期
+    if (t.toDateString() === now.toDateString()) return false;
+    // 周末宽松：周五/周四数据延长到周一早上
+    const hoursSince = (now - t) / (3600 * 1000);
+    const day = now.getDay();
+    if ((day === 0 || day === 6) && hoursSince < 72) return false;
+    if (day === 1 && hoursSince < 84) return false;
+    // 超过24h → 过期
+    return hoursSince > 24;
   })();
   aiSection.classList.toggle('is-stale', isStale);
   reportSection.classList.toggle('is-stale', isStale);
+  aiSection.classList.toggle('is-fresh', !isStale && !!data.generated_at);
+  reportSection.classList.toggle('is-fresh', !isStale && !!data.generated_at);
 
   if (ai.ok && ai.text) {
     aiSection.classList.remove('ai-err');

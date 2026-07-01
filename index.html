@@ -45,20 +45,22 @@
 <div id="main-screen">
   <!-- 资产概览 -->
   <div class="overview max-w">
-    <div class="overview-label">可用资金</div>
     <div class="overview-row">
-      <div class="overview-cash-edit">
-        <div class="overview-cash" id="display-cash">—</div>
-        <button class="cash-edit-btn" onclick="toggleCashEdit()" title="编辑">✎</button>
+      <div class="overview-col">
+        <div class="overview-label">可用资金</div>
+        <div class="overview-cash-edit">
+          <div class="overview-cash" id="display-cash">—</div>
+          <button class="cash-edit-btn" onclick="toggleCashEdit()" title="编辑">✎</button>
+        </div>
       </div>
       <div class="overview-sub">
         <div class="overview-stat">
-          <div class="overview-stat-val" id="display-count">0</div>
           <div class="overview-stat-label">持仓</div>
+          <div class="overview-stat-val" id="display-count">0</div>
         </div>
         <div class="overview-stat">
-          <div class="overview-stat-val" id="display-sync">—</div>
           <div class="overview-stat-label">同步</div>
+          <div class="overview-stat-val" id="display-sync">—</div>
         </div>
       </div>
     </div>

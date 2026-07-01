@@ -476,7 +476,183 @@
     order: 2;
   }
 
-  /* ════════ 持仓列表 ════════ */
+  /* ════════ 决策摘要（操作信息置顶） ════════ */
+  .decision-summary {
+    display: none;
+    margin: 0 12px 8px;
+    background: var(--bg2);
+    border: 1px solid var(--bd);
+    border-radius: 12px;
+    padding: 14px;
+    box-shadow: var(--inset-hl), var(--shadow-sm);
+    animation: fadeIn 0.25s ease-out both;
+  }
+  .decision-summary.open { display: block; }
+  .ds-header {
+    font-family: var(--f-num);
+    font-size: 10px;
+    color: var(--t3);
+    letter-spacing: 0.1em;
+    margin-bottom: 10px;
+    font-weight: 600;
+  }
+  .ds-body { display: flex; flex-direction: column; gap: 6px; }
+
+  /* 执行窗口时间条 */
+  .ds-window {
+    font-family: var(--f-num);
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--buy-dim);
+    border: 1px solid var(--buy-bd);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 4px;
+    font-weight: 600;
+    line-height: 1.5;
+    text-align: center;
+  }
+
+  /* 操作指令列表 */
+  .ds-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 0;
+  }
+
+  /* 单条操作指令 */
+  .ds-action {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-family: var(--f-num);
+    font-size: 13px;
+    line-height: 1.4;
+    border-left: 3px solid transparent;
+    flex-wrap: wrap;
+  }
+  .ds-action-sell { background: var(--up-bg); border-left-color: var(--danger); }
+  .ds-action-buy   { background: var(--buy-dim); border-left-color: var(--accent); }
+  .ds-action-add   { background: var(--buy-dim); border-left-color: var(--accent); }
+  .ds-action-hold  { background: var(--dn-dim); border-left-color: var(--dn); }
+  .ds-action-skip  { background: var(--bg3); border-left-color: var(--t3); color: var(--t2); font-size: 12px; }
+  .ds-action-info  { background: var(--bg3); border-left-color: var(--t3); }
+
+  /* 动作标签徽章 */
+  .ds-act-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+  .ds-action-sell-badge  { background: var(--up-bg); color: var(--danger); border: 1px solid var(--up-bd); }
+  .ds-action-buy-badge   { background: var(--buy-dim); color: var(--accent); border: 1px solid var(--buy-bd); }
+  .ds-action-add-badge   { background: var(--buy-dim); color: var(--accent); border: 1px solid var(--buy-bd); }
+  .ds-action-hold-badge  { background: var(--dn-dim); color: var(--dn); border: 1px solid var(--dn-bd); }
+  .ds-action-skip-badge  { background: var(--bg4); color: var(--t3); border: 1px solid var(--bd2); }
+  .ds-action-info-badge  { background: var(--bg4); color: var(--t3); border: 1px solid var(--bd2); }
+
+  /* 代码、数量、详情 */
+  .ds-act-code {
+    font-weight: 700;
+    color: var(--t1);
+    font-size: 14px;
+    letter-spacing: 0.04em;
+  }
+  .ds-act-name {
+    font-size: 12px;
+    color: var(--t2);
+    font-weight: 400;
+    margin-left: 2px;
+  }
+  .ds-act-qty {
+    font-weight: 600;
+    color: var(--t2);
+    font-size: 12px;
+    background: var(--bg);
+    padding: 1px 7px;
+    border-radius: 4px;
+    border: 1px solid var(--bd);
+  }
+  .ds-act-detail {
+    color: var(--t2);
+    font-size: 11px;
+    font-weight: 400;
+  }
+  /* 详情第二行缩进 */
+  .ds-action-detail {
+    padding: 0 10px 6px 10px;
+    margin-top: -3px;
+    border-radius: 0 0 8px 8px;
+    font-family: var(--f-num);
+    font-size: 11px;
+    color: var(--t3);
+    line-height: 1.4;
+  }
+
+  /* 信号卡片（来自持仓指令段） */
+  .ds-signal {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-family: var(--f-num);
+    font-size: 12px;
+    line-height: 1.5;
+    border-left: 3px solid transparent;
+    word-break: break-word;
+  }
+  .ds-signal-danger {
+    background: var(--up-bg);
+    border-left-color: var(--danger);
+    color: var(--danger);
+    font-weight: 600;
+  }
+  .ds-signal-warn {
+    background: var(--sell-bg);
+    border-left-color: var(--warn);
+    color: var(--warn);
+    font-weight: 500;
+  }
+  .ds-all-ok {
+    background: var(--dn-dim);
+    border-left-color: var(--dn);
+    color: var(--dn);
+    font-weight: 500;
+  }
+
+  /* 新机会卡片 */
+  .ds-opportunity {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-family: var(--f-num);
+    font-size: 12px;
+    background: var(--buy-dim);
+    border: 1px solid var(--buy-bd);
+    color: var(--accent);
+    border-left: 3px solid var(--accent);
+    font-weight: 500;
+    line-height: 1.5;
+  }
+
+  /* 安全持仓计数 */
+  .ds-ok-compact {
+    font-family: var(--f-num);
+    font-size: 11px;
+    color: var(--t3);
+    text-align: right;
+    padding: 2px 4px 0;
+  }
+
   .section-header {
     padding: 20px 16px 8px;
     display: flex;

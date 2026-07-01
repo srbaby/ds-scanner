@@ -392,6 +392,11 @@
   @media (prefers-color-scheme: light) {
     .overview::after { background: radial-gradient(circle, rgba(100,120,160,0.05) 0%, transparent 70%); }
   }
+  .overview-col {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
   .overview-label {
     font-family: var(--f-num);
     font-size: 11px;
@@ -438,7 +443,7 @@
   }
   .overview-row {
     display: flex;
-    align-items: flex-start;
+    align-items: flex-end;
     justify-content: space-between;
     position: relative;
   }
@@ -447,19 +452,20 @@
     gap: 14px;
     position: relative;
     flex-shrink: 0;
+    align-self: stretch;
   }
   .overview-stat {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    gap: 2px;
+    justify-content: space-between;
   }
   .overview-stat-label {
     font-size: 10px;
     color: var(--t2);
     font-family: var(--f-num);
     letter-spacing: 0.04em;
-    order: 2;
+    order: 1;
   }
   .overview-stat-val {
     font-family: var(--f-num);
@@ -467,7 +473,7 @@
     font-weight: 600;
     color: var(--t2);
     font-variant-numeric: tabular-nums;
-    order: 1;
+    order: 2;
   }
 
   /* ════════ 持仓列表 ════════ */

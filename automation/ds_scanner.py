@@ -11,7 +11,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-X-DeepSeek 波段验证系统 - 尾盘扫描器 v3.0
+X-Plan 波段验证系统 - 尾盘扫描器 v3.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 核心升级 v3.0（动态止盈与状态记忆 完全体）:
   - ⭐ [新增] 动态止盈拦截：计算并传入 max_drawdown，严格执行最高点回撤 3% 强制清仓纪律。
@@ -40,7 +40,7 @@ import requests
 # 系统全局常量
 # ============================================================
 SYSTEM_VERSION = "3.0"
-SYSTEM_NAME = "X-DeepSeek 波段验证系统"
+SYSTEM_NAME = "X-Plan 波段验证系统"
 METHODOLOGY_DESC = "价值波段 Value-Swing"
 
 os.environ["TZ"] = "Asia/Shanghai"
@@ -1081,7 +1081,7 @@ def generate_report_v2(
     report = []
     day_num = (datetime.now() - datetime(2026, 2, 4)).days + 1
 
-    report.append(f"# 📡 DS波段扫描 Day {day_num}\n")
+    report.append(f"# 📡 X-Plan波段扫描 Day {day_num}\n")
 
     now = datetime.now()
     h, m = now.hour, now.minute

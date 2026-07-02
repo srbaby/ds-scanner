@@ -295,6 +295,11 @@ function actionLabel(type) {
   return { SELL: '卖出', BUY: '买入', HOLD: '持有', SKIP: '不开', ADD: '加仓', INFO: '提示' }[type] || '提示';
 }
 
+function normalizeActionField(value) {
+  const text = String(value || '').trim();
+  return text === '—' ? '' : text;
+}
+
 function parsePipeAction(line) {
   if (!line.includes('|')) return null;
   const cols = line.split('|').map(s => s.trim());
@@ -304,11 +309,20 @@ function parsePipeAction(line) {
   if (type === 'INFO') return null;
   return {
     type,
-    code: cols[1] === '—' ? '' : cols[1],
-    name: cols[2] === '—' ? '' : cols[2],
-    qty: cols[3] === '—' ? '' : cols[3],
-    note: cols.slice(4).join(' | ').replace(/^—$/, ''),
+    code: normalizeActionField(cols[1]),
+    name: normalizeActionField(cols[2]),
+    qty: normalizeActionField(cols[3]),
+    note: normalizeActionField(cols.slice(4).join(' | ')),
   };
+}
+
+function splitActionLines(lines) {
+  return lines
+    .join('\n')
+    .replace(/\s+(SELL|BUY|HOLD|SKIP|ADD)\s*\|/g, '\n$1 |')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('注：'));
 }
 
 function parseBulletAction(line) {
@@ -333,7 +347,7 @@ function extractQuickGuide(aiText) {
   const actionLines = getAiSection(aiText, '操作清单');
   const windowText = windowLines.find(line => !line.includes('|') && !line.startsWith('类型')) || '';
 
-  let actions = actionLines
+  let actions = splitActionLines(actionLines)
     .map(parsePipeAction)
     .filter(Boolean);
 

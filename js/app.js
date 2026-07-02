@@ -510,6 +510,7 @@ async function saveCash() {
 // ============================================================
 function openDrawer() {
   document.getElementById('new-symbol').value = '';
+  delete document.getElementById('new-symbol').dataset.fullCode;
   document.getElementById('new-qty').value = '';
   document.getElementById('new-cost').value = '';
   document.getElementById('new-date').value = today();
@@ -525,6 +526,9 @@ function closeDrawer() {
 }
 
 function onSymbolInput(val) {
+  // 用户手动改动了代码输入框，之前通过 selectSuggest 记下的完整代码作废，
+  // 否则 addHolding() 会优先用旧的 fullCode 而非当前实际输入的代码（买入代码不匹配的bug）
+  delete document.getElementById('new-symbol').dataset.fullCode;
   const digits = val.replace(/\D/g, '');
   const list = document.getElementById('suggest-list');
   if (digits.length < 3) { list.classList.remove('open'); return; }

@@ -45,7 +45,7 @@ GIST_ID = os.environ.get("DS_SCANNER_GIST_ID", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 DASHBOARD_FILE = "dashboard.json"
-METHODOLOGY_VERSION = "v2.6"
+METHODOLOGY_VERSION = "v2.7"
 
 
 def _gist_headers():

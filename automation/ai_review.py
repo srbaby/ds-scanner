@@ -9,13 +9,12 @@
 """
 X-Plan AI自动复核模块（DeepSeek Flash）
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-读取本目录 X-Plan.md（方法论 canonical）+ report.txt，
+读取本目录 Prompt.md（每日 AI Core Prompt）+ report.txt，
 调用 DeepSeek API 输出基于"三道金牌 + 四维评分 + 双防线止损"的分析。
 
 定位：
 - 本模块只负责"调用AI、拿到文本"，不做展示，不做Gist读写。
-- 方法论文本不在本文件重复抄写，运行时直接读取 X-Plan.md，
-  避免和canonical文档产生第二份拷贝（CLAUDE.md卫生要求）。
+- 复核规则不在本文件重复抄写，运行时直接读取 Prompt.md。
 - 模型可通过环境变量 DEEPSEEK_MODEL 切换（默认 deepseek-v4-flash）。
 - 默认采用 DeepSeek Flash 非思考模式，适合规则审视式日常复核。
 - 对 429/5xx 繁忙类错误做短等待重试，失败仍不阻塞 report 推送。
@@ -43,21 +42,21 @@ DEEPSEEK_RETRIES = int(os.environ.get("DEEPSEEK_RETRIES", "1"))
 DEEPSEEK_RETRY_SLEEP_SECONDS = int(os.environ.get("DEEPSEEK_RETRY_SLEEP_SECONDS", "20"))
 
 # 与 ds_scanner.py 同级目录的上一层（X-Plan/ 根目录）
-METHODOLOGY_FILE = os.path.join(
+PROMPT_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "X-Plan.md",
+    "Prompt.md",
 )
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
 
-def load_methodology() -> Optional[str]:
-    """读取 X-Plan.md 全文，失败返回 None"""
+def load_prompt() -> Optional[str]:
+    """读取 Prompt.md 全文，失败返回 None"""
     try:
-        with open(METHODOLOGY_FILE, "r", encoding="utf-8") as f:
+        with open(PROMPT_FILE, "r", encoding="utf-8") as f:
             return f.read()
     except Exception as e:
-        print(f"  ⚠️ 方法论文件读取失败: {e}")
+        print(f"  ⚠️ Prompt文件读取失败: {e}")
         return None
 
 
@@ -81,23 +80,22 @@ def call_deepseek(report_text: str) -> Dict:
             "error": "未配置 DEEPSEEK_API_KEY，跳过AI分析",
         }
 
-    methodology = load_methodology()
-    if not methodology:
+    prompt = load_prompt()
+    if not prompt:
         return {
             "ok": False,
             "model": DEEPSEEK_MODEL,
             "text": "",
-            "error": f"未找到方法论文件 {METHODOLOGY_FILE}",
+            "error": f"未找到Prompt文件 {PROMPT_FILE}",
         }
 
     system_instruction = (
-        "你是 X-Plan（X-DeepSeek波段验证系统）的AI复核员。\n"
-        "下面是本系统的完整方法论文档（v2.6），这是规则的唯一来源，"
-        "请严格按文档中的三道金牌、四维评分体系、双防线止损（逻辑止损/价格止损/时间止损）、"
-        "持仓-新信号冲突处理矩阵、仓位约束执行分析，不要引入文档之外的规则或个人经验判断。\n"
+        "你是 X-Plan 的每日AI复核员。\n"
+        "下面是本系统的每日AI Core Prompt，这是本次自动复核的唯一执行规则，"
+        "请严格按Prompt输出分析，不要引入文档之外的规则或个人经验判断。\n"
         "如果报告处于非尾盘时段（报告顶部会标注数据时效），请明确提示当前数据是否可用于"
         "尾盘决策，不要把盘中折算量比当作尾盘真实值使用。\n\n"
-        f"{methodology}"
+        f"{prompt}"
     )
 
     payload = {

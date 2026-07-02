@@ -1,303 +1,3 @@
-// ════════════════════════════════════════════════════════════
-// AI 分析文本解析：提取分段 + 信号标识
-// ════════════════════════════════════════════════════════════
-function parseHoldingsSection(lines, i) {
-  const result = { danger: [], warn: [], ok: [] };
-  for (; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (/【/.test(t) && /】/.test(t) && i > 0) break;
-    if (!t) continue;
-    if (t.includes('🔴')) result.danger.push(t);
-    else if (t.includes('🟡')) result.warn.push(t);
-    else if (t.includes('🟢')) result.ok.push(t);
-  }
-  return { result, nextIdx: i };
-}
-
-function parseOpportunitiesSection(lines, i) {
-  const opportunities = [];
-  for (; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (/【/.test(t) && /】/.test(t) && i > 0) break;
-    if (!t) continue;
-    if (/\[\w{6}\]/.test(t)) opportunities.push(t);
-  }
-  return { opportunities, nextIdx: i };
-}
-
-function parseAction(line) {
-  // 先把 markdown 格式化——这是最关键的，不然后面全乱
-  let t = line.replace(/[*_~`#]+/g, '').trim();
-  // 去掉 bullet 前缀
-  t = t.replace(/^[\s*\-•⚠️🔴🟡🟢]+/, '').trim();
-
-  const codeMatch = t.match(/(\d{6})/);
-  const code = codeMatch ? codeMatch[1] : '';
-
-  // 名称优先查 CODE_MAP，没有则尝试从文本提取（代码之后的连续中文）
-  let name = '';
-  if (code && CODE_MAP[code]) {
-    name = CODE_MAP[code].name;
-  } else if (code) {
-    const parts = t.split(code);
-    if (parts.length > 1) {
-      const after = parts[1].trim();
-      const nameMatch = after.match(/^[一-鿿A-Z0-9]+/);
-      if (nameMatch) name = nameMatch[0];
-    }
-  }
-
-  // 动作类型
-  let type = 'info', label = '';
-  if (/卖出|卖\s/.test(t)) { type = 'sell'; label = '卖出'; }
-  else if (/买入|买\s/.test(t)) { type = 'buy'; label = '买入'; }
-  else if (/加仓/.test(t)) { type = 'add'; label = '加仓'; }
-  else if (/持有|持\s/.test(t)) { type = 'hold'; label = '持有'; }
-  else if (/不开新仓|不操作|观望/.test(t)) { type = 'skip'; label = '不开新仓'; }
-  else if (/清仓|止损/.test(t)) { type = 'sell'; label = '清仓'; }
-
-  // 数量
-  let qty = '';
-  const qtyMatch = t.match(/(全部|一半|\d+%?份?|\d+%\s*仓位)/);
-  if (qtyMatch) qty = qtyMatch[1];
-
-  // 详情：去掉动作词、所有 6 位代码、名称、数量之后的剩余
-  let detail = t
-    .replace(/^(卖出|买入|持有|加仓|清仓|止损|不开新仓)/, '')
-    .replace(/\d{6}/g, ' ')
-    .replace(/[（(]\s*/g, '（')
-    .replace(/\s*[）)]/g, '）')
-    .trim();
-  if (name) detail = detail.replace(name, ' ').replace(/\s+/g, ' ').trim();
-  if (qty && detail.includes(qty)) detail = detail.replace(qty, ' ').replace(/\s+/g, ' ').trim();
-  // 清理残留括号和空白
-  detail = detail.replace(/^[（(]\s*/, '').replace(/\s*[）)]$/, '').trim();
-
-  return { type, label, code, name, qty, detail, raw: line };
-}
-
-function parseExecutionWindow(lines, i) {
-  const rawLines = [];
-  for (; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (/【/.test(t) && /】/.test(t) && i > 0) break;
-    if (t) rawLines.push(t);
-  }
-  const timeLine = rawLines[0] || '';
-
-  // 关键：多行合并。Gemini 可能把 action 和详情分行写，
-  // 第一行是 bullet/命令 → 新 action；后续缩进行 → 拼到上一个 action
-  const groups = [];
-  for (let j = 1; j < rawLines.length; j++) {
-    const l = rawLines[j];
-    // 去掉 markdown 后判断是否是独立命令行
-    const clean = l.replace(/[*_~`#]+/g, '').trim();
-    const isBullet = /^[\s]*[*\-•]/.test(l);
-    const isCmd = /^(卖出|买入|持有|加仓|清仓|不开新仓|不操作)/.test(clean);
-    const hasCode = /\d{6}/.test(clean);
-
-    if (isBullet || isCmd || hasCode) {
-      groups.push([l]);
-    } else if (groups.length > 0) {
-      // 续行——拼到前一条
-      groups[groups.length - 1].push(l);
-    }
-  }
-
-  const actions = groups.map(g => parseAction(g.join(' ')));
-
-  return { timeLine, actions: actions.filter(a => a.type !== 'info' || a.code), nextIdx: i };
-}
-
-function parseChecklist(lines, i) {
-  // Parse the structured 【操作清单】 table
-  const rows = [];
-  for (; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (/【/.test(t) && /】/.test(t) && i > 0) break;
-    if (!t || t.startsWith('类型') || t.startsWith('格式说明') || t.startsWith('├─') || t.startsWith('└─') || t.startsWith('│')) continue;
-    // Only match rows with pipes
-    if (!t.includes('|')) continue;
-    rows.push(t);
-  }
-
-  const typeMap = { SELL: 'sell', BUY: 'buy', HOLD: 'hold', SKIP: 'skip', ADD: 'add' };
-  const labelMap = { SELL: '卖出', BUY: '买入', HOLD: '持有', SKIP: '不开新仓', ADD: '加仓' };
-
-  const actions = rows.map(r => {
-    const cols = r.split('|').map(c => c.trim());
-    const rawType = (cols[0] || '').toUpperCase();
-    const type = typeMap[rawType] || 'info';
-    const label = labelMap[rawType] || rawType;
-    const code = (cols[1] || '').replace(/[^0-9]/g, '');
-    const name = (cols[2] && cols[2] !== '—') ? cols[2] : '';
-    const qty = (cols[3] && cols[3] !== '—') ? cols[3] : '';
-    const detail = (cols[4] && cols[4] !== '—') ? cols[4] : '';
-    return { type, label, code, name, qty, detail };
-  }).filter(a => a.type !== 'info' || a.code);
-
-  // Also read the heading line (one before this section start) for time info
-  return { actions, nextIdx: i };
-}
-
-function parseSignals(text) {
-  const lines = text.split('\n');
-  const result = { danger: [], warn: [], ok: [], opportunities: [], window: null, checklist: null };
-
-  for (let i = 0; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (!t) continue;
-
-    if (/【.*(持仓|指令).*】/.test(t)) {
-      const parsed = parseHoldingsSection(lines, i + 1);
-      result.danger = parsed.result.danger;
-      result.warn = parsed.result.warn;
-      result.ok = parsed.result.ok;
-      i = parsed.nextIdx - 1;
-      continue;
-    }
-    if (/【.*(操作清单|checklist).*】/i.test(t)) {
-      const parsed = parseChecklist(lines, i + 1);
-      result.checklist = parsed;
-      i = parsed.nextIdx - 1;
-      continue;
-    }
-    if (/【.*新机会.*】/.test(t)) {
-      const parsed = parseOpportunitiesSection(lines, i + 1);
-      result.opportunities = parsed.opportunities;
-      i = parsed.nextIdx - 1;
-      continue;
-    }
-    if (/【.*(执行|窗).*】/.test(t)) {
-      const parsed = parseExecutionWindow(lines, i + 1);
-      result.window = parsed;
-      i = parsed.nextIdx - 1;
-      continue;
-    }
-  }
-
-  return result;
-}
-
-// 渲染决策摘要置顶区
-function renderDecisionSummary(aiText) {
-  const summary = document.getElementById('decision-summary');
-  const body = document.getElementById('ds-body');
-
-  if (!aiText) { summary.style.display = 'none'; return; }
-
-  const sig = parseSignals(aiText);
-
-  // ─── 动作数据来源：优先结构化清单，回退到模糊解析 ───
-  let actions = [];
-  let timeText = '';
-
-  if (sig.checklist && sig.checklist.actions.length > 0) {
-    actions = sig.checklist.actions;
-    // 时间信息从 window 取
-    if (sig.window?.timeLine) {
-      timeText = sig.window.timeLine.replace(/^【.*】/, '').trim();
-    }
-  } else if (sig.window) {
-    timeText = sig.window.timeLine?.replace(/^【.*】/, '').trim() || '';
-    actions = sig.window.actions || [];
-  }
-
-  // 池外 ETF 名称从持仓数据兜底
-  actions.forEach(a => {
-    if (!a.name && a.code) {
-      const h = holdingsData.holdings?.find(h => h.symbol.includes(a.code));
-      if (h && h.name) a.name = h.name;
-    }
-  });
-
-  const hasDanger = sig.danger.length > 0;
-  const hasWarn = sig.warn.length > 0;
-  const hasOpp = sig.opportunities.length > 0;
-  const hasActions = actions.length > 0;
-  const hasOk = sig.ok.length > 0;
-
-  if (!hasDanger && !hasWarn && !hasOpp && !hasActions && !hasOk) {
-    summary.style.display = 'none'; return;
-  }
-
-  let html = '';
-
-  // ─── 执行窗口动作卡片（最优先） ───
-  if (timeText || hasActions) {
-    if (timeText) {
-      html += `<div class="ds-window">⏱ ${escapeHtml(timeText)}</div>`;
-    }
-
-    if (hasActions) {
-      html += '<div class="ds-actions">';
-      let skipShown = false;
-      actions.forEach(a => {
-        if (a.type === 'skip') { if (skipShown) return; skipShown = true; }
-
-        const typeClass = `ds-action-${a.type}`;
-        const badge = a.label;
-        const codeAndName = a.code
-          ? `<span class="ds-act-code">${a.code}</span>` + (a.name ? `<span class="ds-act-name">${escapeHtml(a.name)}</span>` : '')
-          : '';
-        const qtyInfo = a.qty ? `<span class="ds-act-qty">${a.qty}</span>` : '';
-        const detailText = a.detail ? `<span class="ds-act-detail">${escapeHtml(a.detail)}</span>` : '';
-
-        html += `<div class="ds-action ${typeClass}">`;
-        html +=   `<span class="ds-act-badge ${typeClass}-badge">${badge}</span>`;
-        html +=   codeAndName;
-        html +=   qtyInfo;
-        if (a.detail && !a.code && !a.qty) html += detailText;
-        html += `</div>`;
-
-        if (a.detail && a.code) {
-          html += `<div class="ds-action-detail">${detailText}</div>`;
-        }
-      });
-      html += '</div>';
-    }
-  }
-
-  // 🔴 止损/危险信号（过滤掉执行窗口已覆盖的）
-  if (hasDanger) {
-    const soldCodes = actions.filter(a => a.type === 'sell' && a.code).map(a => a.code);
-
-    sig.danger.forEach(s => {
-      const codeInDanger = s.match(/(\d{6})/);
-      if (codeInDanger && soldCodes.includes(codeInDanger[1])) return;
-      html += `<div class="ds-signal ds-signal-danger">🚨 ${escapeHtml(s)}</div>`;
-    });
-  }
-
-  // 🟡 观察/警戒信号
-  if (hasWarn) {
-    sig.warn.forEach(s => {
-      html += `<div class="ds-signal ds-signal-warn">👀 ${escapeHtml(s)}</div>`;
-    });
-  }
-
-  // 📈 新机会
-  if (hasOpp) {
-    sig.opportunities.forEach(s => {
-      html += `<div class="ds-opportunity">📈 ${escapeHtml(s)}</div>`;
-    });
-  }
-
-  // 🟢 安全信号
-  if (hasDanger || hasWarn) {
-    if (hasOk) {
-      html += `<div class="ds-ok-compact">✅ ${sig.ok.length} 只持有正常</div>`;
-    }
-  } else if (hasOk) {
-    html += `<div class="ds-signal ds-all-ok">✅ ${sig.ok.length} 只持仓正常，无需操作</div>`;
-  }
-
-  body.innerHTML = html;
-  summary.style.display = 'block';
-  summary.classList.add('open');
-}
-
-// ════════════════════════════════════════════════════════════
 // 新增：利用腾讯接口跨境网络获取股票/ETF真实名称
 function fetchOnlineName(symbol, callback) {
   const script = document.createElement('script');
@@ -349,6 +49,7 @@ for (const [full, name] of Object.entries(ETF_POOL)) {
 // 状态
 // ============================================================
 let TOKEN = '', GIST_ID = '', holdingsData = {}, dashboardData = null, gistETag = null;
+const editOpenState = new Set();
 
 // ============================================================
 // 初始化
@@ -431,6 +132,7 @@ async function loadData() {
   const raw = gist.files?.['holdings.json']?.content;
   if (!raw) throw new Error('Gist 中没有 holdings.json');
   holdingsData = JSON.parse(raw);
+  editOpenState.clear();
   if (!holdingsData.holdings) holdingsData.holdings = [];
   if (!holdingsData.cash_available) holdingsData.cash_available = 0;
 
@@ -489,28 +191,30 @@ function renderAll() {
     const name = poolName || h.name || h.symbol;
     const displayCode = h.symbol.replace(/^(sh|sz)/, '');
     const prefix = h.symbol.startsWith('sh') ? 'SH' : 'SZ';
-    const reduced = h.is_reduced ? ' <span style="color:var(--warn);font-size:10px">减仓</span>' : '';
+    const reduced = h.is_reduced ? '<span class="holding-flag holding-flag-reduced">减仓</span>' : '';
+    const isOpen = editOpenState.has(fullIdx);
+    const openClass = isOpen ? ' is-open' : '';
 
     return `
-    <div class="holding-card" id="card-${fullIdx}" style="animation-delay:${Math.min(idx * 0.04, 0.4)}s">
+    <div class="holding-card${openClass}" id="card-${fullIdx}">
       <div class="card-main" onclick="toggleEdit(${fullIdx})">
         <div class="card-code-cell">
           <div class="card-code">${displayCode}</div>
           <div class="card-exch">${prefix}</div>
         </div>
         <div class="card-info">
-          <div class="card-name" id="name-${fullIdx}">${name}${reduced}</div>
+          <div class="card-title-row">
+            <div class="card-name" id="name-${fullIdx}">${name}</div>
+            ${reduced}
+          </div>
           <div class="card-meta">${h.qty.toLocaleString()} 份 · 成本 ${h.cost} · ${h.buy_date}</div>
         </div>
         <div class="card-col card-col-qty">${h.qty.toLocaleString()}</div>
         <div class="card-col card-col-cost">${h.cost}</div>
         <div class="card-col card-col-date">${h.buy_date}</div>
-        <div class="card-actions">
-          <button class="card-btn card-btn-reduce" onclick="event.stopPropagation();openReduce(${fullIdx})">减仓</button>
-          <button class="card-btn card-btn-close" onclick="event.stopPropagation();closePosition(${fullIdx})">清仓</button>
-        </div>
+        <div class="card-expand-indicator" aria-hidden="true">▾</div>
       </div>
-      <div class="card-edit" id="edit-${fullIdx}">
+      <div class="card-edit${isOpen ? ' open' : ''}" id="edit-${fullIdx}">
         <div class="edit-row">
           <div class="edit-field">
             <div class="field-label">数量</div>
@@ -526,8 +230,12 @@ function renderAll() {
           <input type="date" id="ed-${fullIdx}" value="${h.buy_date}">
         </div>
         <div class="edit-save-row">
-          <button class="btn btn-primary" onclick="saveCard(${fullIdx})" style="flex:1">保存</button>
-          <button class="btn btn-ghost" onclick="toggleEdit(${fullIdx})" style="width:auto;padding:10px 14px">取消</button>
+          <button class="btn btn-primary edit-save-btn" onclick="saveCard(${fullIdx})">保存</button>
+          <button class="btn btn-ghost edit-cancel-btn" onclick="toggleEdit(${fullIdx})">取消</button>
+        </div>
+        <div class="edit-action-row">
+          <button class="card-btn card-btn-reduce" onclick="openReduce(${fullIdx})">减仓</button>
+          <button class="card-btn card-btn-close" onclick="closePosition(${fullIdx})">清仓</button>
         </div>
       </div>
     </div>`;
@@ -540,8 +248,7 @@ function renderAll() {
     fetchOnlineName(h.symbol, (onlineName) => {
       const nameEl = document.getElementById(`name-${fullIdx}`);
       if (nameEl && onlineName) {
-        const reduced = h.is_reduced ? ' <span style="color:var(--warn);font-size:10px">减仓</span>' : '';
-        nameEl.innerHTML = onlineName + reduced;
+        nameEl.textContent = onlineName;
         h.name = onlineName;
       }
     });
@@ -549,8 +256,135 @@ function renderAll() {
 } // <─── 注意！这个大括号必须在最后面，用来闭合 renderAll 函数
 
 function toggleEdit(idx) {
-  const el = document.getElementById(`edit-${idx}`);
-  el.classList.toggle('open');
+  if (editOpenState.has(idx)) {
+    editOpenState.delete(idx);
+  } else {
+    editOpenState.add(idx);
+  }
+  renderAll();
+}
+
+// ============================================================
+// 快速操作指引（仅提取标准回复末尾的执行窗口/操作清单）
+// ============================================================
+function getAiSection(text, heading) {
+  const lines = String(text || '').split('\n');
+  const start = lines.findIndex(line => line.trim().startsWith(`【${heading}】`));
+  if (start < 0) return [];
+  const out = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (/^【[^】]+】/.test(line)) break;
+    if (line) out.push(line);
+  }
+  return out;
+}
+
+function normalizeActionType(raw) {
+  const t = String(raw || '').trim().toUpperCase();
+  if (['SELL', 'BUY', 'HOLD', 'SKIP', 'ADD'].includes(t)) return t;
+  if (/卖出|清仓|止损/.test(raw)) return 'SELL';
+  if (/买入/.test(raw)) return 'BUY';
+  if (/加仓/.test(raw)) return 'ADD';
+  if (/持有|持\b/.test(raw)) return 'HOLD';
+  if (/不开新仓|不操作|观望/.test(raw)) return 'SKIP';
+  return 'INFO';
+}
+
+function actionLabel(type) {
+  return { SELL: '卖出', BUY: '买入', HOLD: '持有', SKIP: '不开', ADD: '加仓', INFO: '提示' }[type] || '提示';
+}
+
+function parsePipeAction(line) {
+  if (!line.includes('|')) return null;
+  const cols = line.split('|').map(s => s.trim());
+  if (cols.length < 5) return null;
+  if (/^类型$/i.test(cols[0]) || /^[-:]+$/.test(cols[0])) return null;
+  const type = normalizeActionType(cols[0]);
+  if (type === 'INFO') return null;
+  return {
+    type,
+    code: cols[1] === '—' ? '' : cols[1],
+    name: cols[2] === '—' ? '' : cols[2],
+    qty: cols[3] === '—' ? '' : cols[3],
+    note: cols.slice(4).join(' | ').replace(/^—$/, ''),
+  };
+}
+
+function parseBulletAction(line) {
+  let text = String(line || '').replace(/^[\s>*\-•·]+/, '').trim();
+  if (!text) return null;
+  const type = normalizeActionType(text);
+  if (type === 'INFO') return null;
+  const codeMatch = text.match(/(?:sh|sz)?\d{6}/i);
+  const code = codeMatch ? codeMatch[0] : '';
+  let rest = text
+    .replace(/^(卖出|买入|持有|加仓|清仓|止损|不开新仓|不操作|观望)\s*/i, '')
+    .replace(code, '')
+    .trim();
+  const qtyMatch = rest.match(/(全部|一半|\d+(?:\.\d+)?%仓位|\d+(?:\.\d+)?%|\d+份)/);
+  const qty = qtyMatch ? qtyMatch[1] : '';
+  if (qty) rest = rest.replace(qty, '').trim();
+  return { type, code, name: '', qty, note: rest.replace(/[（）()]/g, '').trim() };
+}
+
+function extractQuickGuide(aiText) {
+  const windowLines = getAiSection(aiText, '执行窗口');
+  const actionLines = getAiSection(aiText, '操作清单');
+  const windowText = windowLines.find(line => !line.includes('|') && !line.startsWith('类型')) || '';
+
+  let actions = actionLines
+    .map(parsePipeAction)
+    .filter(Boolean);
+
+  if (actions.length === 0) {
+    actions = windowLines
+      .map(parseBulletAction)
+      .filter(Boolean);
+  }
+
+  if (!windowText && actions.length === 0) return null;
+  return { windowText, actions };
+}
+
+function renderQuickGuide(data, aiText) {
+  const guide = document.getElementById('quick-guide');
+  const body = document.getElementById('quick-guide-body');
+  const meta = document.getElementById('quick-guide-meta');
+  const parsed = extractQuickGuide(aiText);
+
+  if (!parsed) {
+    guide.hidden = true;
+    body.innerHTML = '';
+    meta.textContent = '—';
+    return false;
+  }
+
+  meta.textContent = [data.generated_at, data.methodology_version].filter(Boolean).join(' · ') || '—';
+  const parts = [];
+  if (parsed.windowText) {
+    parts.push(`<div class="quick-window">${escapeHtml(parsed.windowText)}</div>`);
+  }
+  if (parsed.actions.length) {
+    parts.push('<div class="quick-actions">');
+    parsed.actions.forEach(action => {
+      const type = action.type.toLowerCase();
+      const main = [action.code, action.name].filter(Boolean).join(' ');
+      const title = main || action.note || actionLabel(action.type);
+      parts.push(`<div class="quick-action quick-action-${type}">`);
+      parts.push(`<div class="quick-type">${actionLabel(action.type)}</div>`);
+      parts.push(`<div class="quick-main">${escapeHtml(title)}</div>`);
+      parts.push(`<div class="quick-qty">${escapeHtml(action.qty || '')}</div>`);
+      if (action.note && action.note !== title) {
+        parts.push(`<div class="quick-note">${escapeHtml(action.note)}</div>`);
+      }
+      parts.push('</div>');
+    });
+    parts.push('</div>');
+  }
+  body.innerHTML = parts.join('');
+  guide.hidden = false;
+  return true;
 }
 
 // ============================================================
@@ -563,7 +397,7 @@ function renderDashboard(data) {
   const reportSection = document.getElementById('report-section');
   const reportBody    = document.getElementById('report-body');
   if (!data) {
-    document.getElementById('decision-summary').style.display = 'none';
+    document.getElementById('quick-guide').hidden = true;
     aiSection.classList.remove('ai-err');
     aiSection.classList.remove('is-stale');
     aiSection.classList.remove('is-fresh');
@@ -576,7 +410,7 @@ function renderDashboard(data) {
   }
 
   const ai = data.ai || {};
-  aiMeta.textContent = [data.generated_at, data.methodology_version, ai.model]
+  aiMeta.textContent = [data.methodology_version, ai.model]
     .filter(Boolean).join(' · ') || '—';
 
   // 数据过期判断：同日不标过期；周末对周五数据宽松；超过24h标记
@@ -600,16 +434,16 @@ function renderDashboard(data) {
   aiSection.classList.toggle('is-fresh', !isStale && !!data.generated_at);
   reportSection.classList.toggle('is-fresh', !isStale && !!data.generated_at);
 
-  // 决策摘要置顶渲染
-  renderDecisionSummary(ai.ok && ai.text ? ai.text : null);
-
   if (ai.ok && ai.text) {
+    const hasQuickGuide = renderQuickGuide(data, ai.text);
     aiSection.classList.remove('ai-err');
     aiBody.innerHTML = marked.parse(ai.text);
+    aiSection.open = !hasQuickGuide;
     reportSection.open = false; // 干货已展示，原始数据默认折叠
   } else {
+    document.getElementById('quick-guide').hidden = true;
     aiSection.classList.add('ai-err');
-    document.getElementById('decision-summary').style.display = 'none';
+    aiSection.open = true;
     aiBody.innerHTML = `<div class="error-box">⚠️ AI分析失败：${escapeHtml(ai.error || '未知错误')}\n\n请展开下方「原始扫描数据」，手动复制给Gemini/DeepSeek网页版分析。</div>`;
     reportSection.open = true; // AI失败兜底：自动展开原始数据
   }
@@ -738,6 +572,7 @@ async function addHolding() {
   if (comment) entry._comment = comment;
 
   holdingsData.holdings.push(entry);
+  editOpenState.clear();
   closeDrawer();
   renderAll();
   await saveData();
@@ -757,6 +592,7 @@ function openReduce(idx) {
   }
   h.qty = qty;
   h.is_reduced = true;
+  editOpenState.clear();
   if (qty === 0) {
     removeCardWithAnimation(idx, () => {
       holdingsData.holdings.splice(idx, 1);
@@ -775,6 +611,7 @@ function openReduce(idx) {
 function closePosition(idx) {
   const h = holdingsData.holdings[idx];
   if (!confirm(`确认清仓 ${h.symbol}？此操作将删除该记录。`)) return;
+  editOpenState.clear();
   removeCardWithAnimation(idx, () => {
     holdingsData.holdings.splice(idx, 1);
     renderAll();
@@ -803,6 +640,7 @@ async function saveCard(idx) {
   holdingsData.holdings[idx].qty = qty;
   holdingsData.holdings[idx].cost = cost;
   holdingsData.holdings[idx].buy_date = date;
+  editOpenState.delete(idx);
   renderAll();
   await saveData();
 }

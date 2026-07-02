@@ -71,12 +71,30 @@
     </div>
   </div>
 
-  <!-- 决策摘要（操作摘要置顶，在持仓上方） -->
+  <!-- 快速操作指引 + AI分析（默认折叠） + 原始扫描数据（默认折叠） -->
   <div class="max-w">
-    <div class="decision-summary" id="decision-summary" style="display:none">
-      <div class="ds-header">⚡ 今日操作摘要</div>
-      <div class="ds-body" id="ds-body"></div>
-    </div>
+    <section class="quick-guide" id="quick-guide" hidden>
+      <div class="quick-guide-head">
+        <div class="quick-guide-title">快速操作指引</div>
+        <div class="quick-guide-meta" id="quick-guide-meta">—</div>
+      </div>
+      <div class="quick-guide-body" id="quick-guide-body"></div>
+    </section>
+
+    <details class="info-section info-section-primary" id="ai-section">
+      <summary>完整AI分析<span class="info-meta" id="ai-meta">—</span></summary>
+      <div class="info-body markdown-body" id="ai-body">
+        <div class="empty-state"><div class="empty-icon">🤖</div><div>暂无今日 AI 分析</div><div class="empty-hint">等待 dashboard.json 推送</div></div>
+      </div>
+    </details>
+
+    <details class="info-section" id="report-section">
+      <summary>原始扫描数据（report.txt）</summary>
+      <div class="info-body markdown-body" id="report-body">
+        <div class="empty-state"><div class="empty-icon">📡</div><div>暂无扫描数据</div><div class="empty-hint">等待 report.txt 推送</div></div>
+      </div>
+    </details>
+
   </div>
 
   <!-- 持仓列表 -->
@@ -101,26 +119,9 @@
     </div>
   </div>
 
-  <!-- AI分析（干货：最终买卖指令，默认展开） + 原始扫描数据（默认折叠） -->
-  <div class="max-w">
-    <details class="info-section" id="ai-section" open>
-      <summary>🤖 今日AI分析<span class="info-meta" id="ai-meta">—</span></summary>
-      <div class="info-body markdown-body" id="ai-body">
-        <div class="empty-state"><div class="empty-icon">🤖</div><div>暂无今日 AI 分析</div><div class="empty-hint">等待 dashboard.json 推送</div></div>
-      </div>
-    </details>
-
-    <details class="info-section" id="report-section">
-      <summary>📡 原始扫描数据（report.txt）</summary>
-      <div class="info-body markdown-body" id="report-body">
-        <div class="empty-state"><div class="empty-icon">📡</div><div>暂无扫描数据</div><div class="empty-hint">等待 report.txt 推送</div></div>
-      </div>
-    </details>
-  </div>
-
   <!-- FAB -->
   <div class="fab-area">
-    <button class="fab" onclick="openDrawer()">＋ 买入建仓</button>
+    <button class="fab" onclick="openDrawer()" title="买入建仓" aria-label="买入建仓">+</button>
   </div>
 </div>
 

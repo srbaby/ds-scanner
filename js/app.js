@@ -147,16 +147,23 @@ async function saveData() {
   setStatus('同步中…', '');
   try {
     const content = JSON.stringify(holdingsData, null, 2);
+    // 注意：GitHub Gist PATCH 接口不支持 If-Match 条件请求头，带上就会被直接拒绝
+    // （400 "Conditional request headers are not allowed in unsafe requests unless
+    // supported by the endpoint"）。之前加 If-Match 是想做乐观并发校验，但这个接口不支持，
+    // 会导致所有写入（买入/加仓/减仓/清仓/改资金）100%保存失败，因此不发送该头。
     const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
       method: 'PATCH',
       headers: {
         Authorization: `token ${TOKEN}`,
-        'Content-Type': 'application/json',
-        ...(gistETag ? { 'If-Match': gistETag } : {})
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ files: { 'holdings.json': { content } } })
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) {
+      const detail = await r.text().catch(() => '');
+      throw new Error(`HTTP ${r.status}${detail ? ' ' + detail.slice(0, 200) : ''}`);
+    }
+    gistETag = r.headers.get('ETag');
     setStatus('已同步', 'ok');
     document.getElementById('display-sync').textContent =
       new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});

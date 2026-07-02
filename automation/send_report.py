@@ -29,14 +29,14 @@ def send_bark(report_text):
 
     today = datetime.now().strftime('%Y-%m-%d')
 
-    # 全文塞body（不做截断/中转），便于直接在Bark App长按复制给DeepSeek/Gemini。
+    # 全文塞body（不做截断/中转），便于直接在Bark App长按复制给AI兜底分析。
     # 注意：APNs单条推送payload上限约4KB，report.txt若超长可能被系统截断——
     # 这是已知风险，按JanY要求选择"全文优先"而非"摘要+链接中转"。
     payload = {
-        "title": f"📡 DS波段扫描 {today}",
+        "title": f"📡 X-Plan波段扫描 {today}",
         "body": report_text,
         "level": "active",
-        "group": "DS扫描",
+        "group": "X-Plan扫描",
         "badge": 1,
         "icon": BARK_ICON,
     }

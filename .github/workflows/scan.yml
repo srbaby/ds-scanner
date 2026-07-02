@@ -1,4 +1,4 @@
-name: DS波段扫描
+name: X-Plan波段扫描
 
 # 定时触发已全面迁移至 Cloudflare Worker 内网服务绑定通道（Master-Scheduler ➔ ds-scan-trigger）
 # 本工作流支持：CF Worker 自动远程唤醒 / 手机 GitHub App 手动触发
@@ -24,6 +24,7 @@ jobs:
           cache-dependency-path: |
             automation/ds_scanner.py
             automation/generate_dashboard.py
+            automation/gemini_reliability_check.py
 
       - name: 安装Python依赖
         run: pip install requests pandas akshare lxml beautifulsoup4
@@ -54,3 +55,14 @@ jobs:
         run: python automation/send_report.py
         env:
           BARK_KEY: ${{ secrets.BARK_KEY }}
+          BARK_KEY_WIFE: ${{ secrets.BARK_KEY_WIFE }}
+
+      - name: Gemini API可靠性验证并Bark推送
+        run: python automation/gemini_reliability_check.py
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.5-flash
+          BARK_KEY: ${{ secrets.BARK_KEY }}
+          BARK_KEY_WIFE: ${{ secrets.BARK_KEY_WIFE }}
+        # 影子验证失败不影响扫描报告与正式DeepSeek看板
+        continue-on-error: true

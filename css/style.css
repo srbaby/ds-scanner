@@ -373,24 +373,19 @@
 
   /* ════════ 资产概览 ════════ */
   .overview {
-    position: relative;
-    background: var(--overview-bg);
-    border-bottom: 1px solid var(--bd);
-    padding: 22px 16px 20px;
-    margin-bottom: 8px;
-    box-shadow: var(--inset-hl), 0 2px 20px rgba(0,0,0,0.12);
-    overflow: hidden;
-  }
-  .overview::after {
-    content: '';
-    position: absolute;
-    top: -60%; right: -10%;
-    width: 220px; height: 220px;
-    background: radial-gradient(circle, rgba(120,140,180,0.08) 0%, transparent 70%);
-    pointer-events: none;
+    background: rgba(17,24,39,0.56);
+    border: 1px solid var(--bd);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin: 12px 12px 8px;
+    box-shadow: var(--inset-hl), var(--shadow-sm);
+    backdrop-filter: blur(14px) saturate(120%);
+    -webkit-backdrop-filter: blur(14px) saturate(120%);
   }
   @media (prefers-color-scheme: light) {
-    .overview::after { background: radial-gradient(circle, rgba(100,120,160,0.05) 0%, transparent 70%); }
+    .overview {
+      background: rgba(255,255,255,0.88);
+    }
   }
   .overview-col {
     display: flex;
@@ -399,20 +394,17 @@
   }
   .overview-label {
     font-family: var(--f-num);
-    font-size: 11px;
+    font-size: 10px;
     color: var(--t2);
-    letter-spacing: 0.12em;
-    margin-bottom: 5px;
-    position: relative;
+    letter-spacing: 0.08em;
+    margin-bottom: 3px;
   }
   .overview-cash {
     font-family: var(--f-num);
-    font-size: 24px;
+    font-size: 21px;
     font-weight: 700;
     color: var(--overview-cash);
     letter-spacing: -0.02em;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.22);
-    position: relative;
     font-variant-numeric: tabular-nums;
   }
   .overview-cash-edit {
@@ -435,7 +427,7 @@
     align-items: center;
   }
   .cash-input-row[style*="flex"] { animation: fadeInUp 0.22s ease-out both; }
-  .cash-input-row input { font-size: 18px; padding: 8px 12px; }
+  .cash-input-row input { font-size: 16px; padding: 8px 12px; }
   .cash-input-row .btn {
     width: auto;
     padding: 8px 16px;
@@ -443,22 +435,21 @@
   }
   .overview-row {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     justify-content: space-between;
-    position: relative;
+    gap: 12px;
   }
   .overview-sub {
     display: flex;
-    gap: 14px;
-    position: relative;
+    gap: 12px;
     flex-shrink: 0;
-    align-self: stretch;
+    align-self: center;
   }
   .overview-stat {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    justify-content: space-between;
+    gap: 3px;
   }
   .overview-stat-label {
     font-size: 10px;
@@ -469,192 +460,15 @@
   }
   .overview-stat-val {
     font-family: var(--f-num);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--t2);
     font-variant-numeric: tabular-nums;
     order: 2;
   }
 
-  /* ════════ 决策摘要（操作信息置顶） ════════ */
-  .decision-summary {
-    display: none;
-    margin: 0 12px 8px;
-    background: var(--bg2);
-    border: 1px solid var(--bd);
-    border-radius: 12px;
-    padding: 14px;
-    box-shadow: var(--inset-hl), var(--shadow-sm);
-    animation: fadeIn 0.25s ease-out both;
-  }
-  .decision-summary.open { display: block; }
-  .ds-header {
-    font-family: var(--f-num);
-    font-size: 10px;
-    color: var(--t3);
-    letter-spacing: 0.1em;
-    margin-bottom: 10px;
-    font-weight: 600;
-  }
-  .ds-body { display: flex; flex-direction: column; gap: 6px; }
-
-  /* 执行窗口时间条 */
-  .ds-window {
-    font-family: var(--f-num);
-    font-size: 12px;
-    color: var(--accent);
-    background: var(--buy-dim);
-    border: 1px solid var(--buy-bd);
-    border-radius: 8px;
-    padding: 8px 12px;
-    margin-bottom: 4px;
-    font-weight: 600;
-    line-height: 1.5;
-    text-align: center;
-  }
-
-  /* 操作指令列表 */
-  .ds-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    padding: 0;
-  }
-
-  /* 单条操作指令 */
-  .ds-action {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    font-family: var(--f-num);
-    font-size: 13px;
-    line-height: 1.4;
-    border-left: 3px solid transparent;
-    flex-wrap: wrap;
-  }
-  .ds-action-sell { background: var(--up-bg); border-left-color: var(--danger); }
-  .ds-action-buy   { background: var(--buy-dim); border-left-color: var(--accent); }
-  .ds-action-add   { background: var(--buy-dim); border-left-color: var(--accent); }
-  .ds-action-hold  { background: var(--dn-dim); border-left-color: var(--dn); }
-  .ds-action-skip  { background: var(--bg3); border-left-color: var(--t3); color: var(--t2); font-size: 12px; }
-  .ds-action-info  { background: var(--bg3); border-left-color: var(--t3); }
-
-  /* 动作标签徽章 */
-  .ds-act-badge {
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 4px;
-    letter-spacing: 0.04em;
-    flex-shrink: 0;
-  }
-  .ds-action-sell-badge  { background: var(--up-bg); color: var(--danger); border: 1px solid var(--up-bd); }
-  .ds-action-buy-badge   { background: var(--buy-dim); color: var(--accent); border: 1px solid var(--buy-bd); }
-  .ds-action-add-badge   { background: var(--buy-dim); color: var(--accent); border: 1px solid var(--buy-bd); }
-  .ds-action-hold-badge  { background: var(--dn-dim); color: var(--dn); border: 1px solid var(--dn-bd); }
-  .ds-action-skip-badge  { background: var(--bg4); color: var(--t3); border: 1px solid var(--bd2); }
-  .ds-action-info-badge  { background: var(--bg4); color: var(--t3); border: 1px solid var(--bd2); }
-
-  /* 代码、数量、详情 */
-  .ds-act-code {
-    font-weight: 700;
-    color: var(--t1);
-    font-size: 14px;
-    letter-spacing: 0.04em;
-  }
-  .ds-act-name {
-    font-size: 12px;
-    color: var(--t2);
-    font-weight: 400;
-    margin-left: 2px;
-  }
-  .ds-act-qty {
-    font-weight: 600;
-    color: var(--t2);
-    font-size: 12px;
-    background: var(--bg);
-    padding: 1px 7px;
-    border-radius: 4px;
-    border: 1px solid var(--bd);
-  }
-  .ds-act-detail {
-    color: var(--t2);
-    font-size: 11px;
-    font-weight: 400;
-  }
-  /* 详情第二行缩进 */
-  .ds-action-detail {
-    padding: 0 10px 6px 10px;
-    margin-top: -3px;
-    border-radius: 0 0 8px 8px;
-    font-family: var(--f-num);
-    font-size: 11px;
-    color: var(--t3);
-    line-height: 1.4;
-  }
-
-  /* 信号卡片（来自持仓指令段） */
-  .ds-signal {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-family: var(--f-num);
-    font-size: 12px;
-    line-height: 1.5;
-    border-left: 3px solid transparent;
-    word-break: break-word;
-  }
-  .ds-signal-danger {
-    background: var(--up-bg);
-    border-left-color: var(--danger);
-    color: var(--danger);
-    font-weight: 600;
-  }
-  .ds-signal-warn {
-    background: var(--sell-bg);
-    border-left-color: var(--warn);
-    color: var(--warn);
-    font-weight: 500;
-  }
-  .ds-all-ok {
-    background: var(--dn-dim);
-    border-left-color: var(--dn);
-    color: var(--dn);
-    font-weight: 500;
-  }
-
-  /* 新机会卡片 */
-  .ds-opportunity {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-family: var(--f-num);
-    font-size: 12px;
-    background: var(--buy-dim);
-    border: 1px solid var(--buy-bd);
-    color: var(--accent);
-    border-left: 3px solid var(--accent);
-    font-weight: 500;
-    line-height: 1.5;
-  }
-
-  /* 安全持仓计数 */
-  .ds-ok-compact {
-    font-family: var(--f-num);
-    font-size: 11px;
-    color: var(--t3);
-    text-align: right;
-    padding: 2px 4px 0;
-  }
-
   .section-header {
-    padding: 20px 16px 8px;
+    padding: 16px 16px 8px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -695,6 +509,10 @@
     transition: border-color 0.2s, transform 0.2s, opacity 0.2s, box-shadow 0.25s ease;
     animation: fadeInUp 0.32s ease-out both;
   }
+  .holding-card.is-open {
+    border-color: var(--bd2);
+    box-shadow: var(--inset-hl), var(--shadow-md);
+  }
   .holding-card.exit {
     animation: fadeIn 0.2s ease-out reverse both;
   }
@@ -722,6 +540,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    cursor: pointer;
   }
   .card-code-cell {
     display: flex;
@@ -752,6 +571,12 @@
     letter-spacing: 0.06em;
   }
   .card-info { flex: 1; min-width: 0; }
+  .card-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
   .card-name {
     font-size: 15px;
     font-weight: 600;
@@ -761,6 +586,22 @@
     text-overflow: ellipsis;
     letter-spacing: 0.01em;
   }
+  .holding-flag {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-family: var(--f-num);
+    font-size: 10px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  .holding-flag-reduced {
+    color: var(--warn);
+    background: rgba(245,158,11,0.08);
+    border: 1px solid rgba(245,158,11,0.18);
+  }
   .card-meta {
     font-family: var(--f-num);
     font-size: 12px;
@@ -769,11 +610,23 @@
     font-variant-numeric: tabular-nums;
   }
   .card-col { display: none; }
-  .card-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+  .card-expand-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    border: 1px solid var(--bd);
+    background: var(--bg3);
+    color: var(--t2);
     flex-shrink: 0;
+    transition: transform 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  }
+  .holding-card.is-open .card-expand-indicator {
+    color: var(--accent);
+    border-color: var(--buy-bd);
+    transform: rotate(180deg);
   }
   .card-btn {
     border: none;
@@ -799,6 +652,10 @@
     color: var(--danger);
     border: 1px solid rgba(255,71,87,0.15);
   }
+  .card-secondary-actions {
+    display: flex;
+    gap: 8px;
+  }
 
   /* ════════ 展开编辑区 ════════ */
   .card-edit {
@@ -822,6 +679,21 @@
     margin-top: 4px;
   }
   .edit-save-row .btn { padding: 10px; font-size: 12px; }
+  .edit-save-btn { flex: 1; }
+  .edit-cancel-btn {
+    width: auto;
+    padding: 10px 14px;
+  }
+  .edit-action-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .edit-action-row .card-btn {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 12px;
+  }
 
   /* ════════ 加载骨架 ════════ */
   .loading-skeleton {
@@ -902,7 +774,7 @@
 
   /* ════════ 数据更新闪烁 ════════ */
   @keyframes flash-refresh {
-    0% { background: rgba(0, 212, 255, 0.16); }
+    0% { background: rgba(96,165,250,0.12); }
     100% { background: transparent; }
   }
   .flash-refresh {
@@ -917,17 +789,16 @@
   }
   .is-stale .card-code { color: var(--t2); }
 
-  /* 数据新鲜：summary 左侧绿色脉冲标记 */
+  /* 数据新鲜：summary 左侧低饱和蓝色标记 */
   .is-fresh > summary::before {
     content: '';
     display: inline-block;
     width: 6px; height: 6px;
     border-radius: 50%;
     background: var(--accent2);
-    box-shadow: 0 0 6px rgba(0,255,136,0.5);
+    box-shadow: 0 0 0 1px rgba(96,165,250,0.18);
     margin-right: 4px;
     flex-shrink: 0;
-    animation: dot-breathe 2.4s ease-in-out infinite;
   }
 
   /* ════════ 入场动画 ════════ */
@@ -945,24 +816,25 @@
     position: fixed;
     bottom: 0;
     left: 0; right: 0;
-    padding: 12px max(16px, var(--sal)) calc(24px + var(--sab)) max(16px, var(--sar));
-    background: linear-gradient(to top, var(--bg) 60%, transparent);
+    padding: 0 max(16px, var(--sal)) calc(18px + var(--sab)) max(16px, var(--sar));
     pointer-events: none;
   }
   .fab {
-    width: 100%;
-    max-width: 480px;
-    margin: 0 auto;
-    display: block;
+    width: 46px;
+    height: 46px;
+    margin: 0 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: var(--bg2);
     border: 1px solid var(--bd);
     color: var(--accent);
-    border-radius: 12px;
-    padding: 14px;
+    border-radius: 50%;
+    padding: 0;
     font-family: var(--f-num);
-    font-size: 14px;
+    font-size: 24px;
     font-weight: 600;
-    letter-spacing: 0.06em;
+    line-height: 1;
     cursor: pointer;
     transition: all 0.2s;
     pointer-events: auto;
@@ -1098,9 +970,107 @@
 
   .max-w { max-width: 480px; margin: 0 auto; }
 
+  /* ════════ 快速操作指引 ════════ */
+  .quick-guide {
+    margin: 8px 12px 12px;
+    background: var(--bg2);
+    border: 1px solid var(--bd);
+    border-radius: 12px;
+    box-shadow: var(--inset-hl), var(--shadow-sm);
+    overflow: hidden;
+  }
+  .quick-guide[hidden] { display: none; }
+  .quick-guide-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--bg3);
+    border-bottom: 1px solid var(--bd);
+  }
+  .quick-guide-title {
+    color: var(--accent);
+    font-family: var(--f-num);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    white-space: nowrap;
+  }
+  .quick-guide-meta {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--t2);
+    font-family: var(--f-num);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .quick-guide-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px 12px;
+  }
+  .quick-window {
+    color: var(--t2);
+    font-family: var(--f-num);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .quick-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .quick-action {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 10px;
+    background: var(--bg3);
+    border: 1px solid var(--bd);
+    border-left: 3px solid var(--t3);
+    border-radius: 8px;
+  }
+  .quick-action-sell { border-left-color: var(--danger); background: rgba(255,71,87,0.05); }
+  .quick-action-buy,
+  .quick-action-add { border-left-color: var(--accent); background: var(--buy-bg); }
+  .quick-action-hold { border-left-color: var(--t2); }
+  .quick-action-skip { border-left-color: var(--t3); }
+  .quick-type {
+    min-width: 42px;
+    color: var(--t1);
+    font-family: var(--f-num);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .quick-main {
+    min-width: 0;
+    color: var(--t1);
+    font-size: 13px;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .quick-qty {
+    color: var(--t2);
+    font-family: var(--f-num);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .quick-note {
+    grid-column: 2 / -1;
+    color: var(--t2);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
   /* ════════ AI分析 / 原始扫描数据 折叠区（借鉴基金看板柔和配色） ════════ */
   .info-section {
-    margin: 0 12px 16px;
+    margin: 0 12px 10px;
     background: var(--bg2);
     border: 1px solid var(--bd);
     border-radius: 12px;
@@ -1108,13 +1078,17 @@
     box-shadow: var(--inset-hl), var(--shadow-sm);
     transition: box-shadow 0.25s ease;
   }
+  .info-section-primary {
+    margin-top: 6px;
+  }
   .info-section[open] {
     box-shadow: var(--inset-hl), var(--shadow-md);
   }
   .info-section summary {
     list-style: none;
     cursor: pointer;
-    padding: 14px;
+    min-height: 42px;
+    padding: 9px 12px;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -1124,7 +1098,6 @@
     font-weight: 600;
     color: var(--accent);
     background: var(--bg3);
-    white-space: nowrap;
     transition: background 0.18s ease;
   }
   .info-section summary:active { background: var(--bg4); }
@@ -1137,7 +1110,7 @@
   }
   .info-section[open] summary::after { transform: rotate(180deg); }
   .info-section .info-meta {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--t2);
     font-weight: 400;
     letter-spacing: 0;
@@ -1146,6 +1119,8 @@
     white-space: nowrap;
     min-width: 0;
     flex-shrink: 1;
+    margin-left: auto;
+    text-align: right;
   }
   .info-section .info-body {
     padding: 14px 16px;
@@ -1155,6 +1130,34 @@
     animation: fadeIn 0.28s ease-out both;
   }
   .info-section.ai-err summary { color: var(--danger); }
+
+  @media (max-width: 420px) {
+    .overview-row {
+      align-items: flex-start;
+    }
+    .overview-cash {
+      font-size: 19px;
+    }
+    .info-section summary {
+      align-items: center;
+      flex-wrap: nowrap;
+    }
+    .info-section .info-meta {
+      max-width: 52%;
+      margin-left: auto;
+      text-align: right;
+    }
+    .edit-save-row,
+    .edit-action-row,
+    .card-secondary-actions {
+      flex-wrap: wrap;
+    }
+    .edit-save-row .btn,
+    .edit-action-row .card-btn,
+    .card-secondary-actions .card-btn {
+      width: 100%;
+    }
+  }
 
   /* ════════ Markdown 渲染（柔和、护眼、带细节样式） ════════ */
   .markdown-body { color: var(--t1); }
@@ -1181,7 +1184,7 @@
   .markdown-body a {
     color: var(--accent);
     text-decoration: none;
-    border-bottom: 1px dashed rgba(0,212,255,0.4);
+    border-bottom: 1px dashed rgba(96,165,250,0.4);
   }
   .markdown-body a:hover { border-bottom-style: solid; }
   .markdown-body code {
@@ -1235,11 +1238,11 @@
     background: rgba(255,255,255,0.015);
   }
   .markdown-body tbody tr:hover td {
-    background: rgba(0,212,255,0.04);
+    background: rgba(96,165,250,0.04);
   }
   .markdown-body blockquote {
     border-left: 3px solid var(--accent);
-    background: rgba(0,212,255,0.04);
+    background: rgba(96,165,250,0.04);
     padding: 8px 12px;
     color: var(--t2);
     margin: 8px 0;

@@ -351,6 +351,8 @@ function renderQuickGuide(data, aiText) {
   const guide = document.getElementById('quick-guide');
   const body = document.getElementById('quick-guide-body');
   const meta = document.getElementById('quick-guide-meta');
+  if (!guide || !body || !meta) return false;
+
   const parsed = extractQuickGuide(aiText);
 
   if (!parsed) {
@@ -396,8 +398,11 @@ function renderDashboard(data) {
   const aiBody    = document.getElementById('ai-body');
   const reportSection = document.getElementById('report-section');
   const reportBody    = document.getElementById('report-body');
+  const quickGuide = document.getElementById('quick-guide');
+  if (!aiSection || !aiMeta || !aiBody || !reportSection || !reportBody) return;
+
   if (!data) {
-    document.getElementById('quick-guide').hidden = true;
+    if (quickGuide) quickGuide.hidden = true;
     aiSection.classList.remove('ai-err');
     aiSection.classList.remove('is-stale');
     aiSection.classList.remove('is-fresh');
@@ -437,18 +442,18 @@ function renderDashboard(data) {
   if (ai.ok && ai.text) {
     const hasQuickGuide = renderQuickGuide(data, ai.text);
     aiSection.classList.remove('ai-err');
-    aiBody.innerHTML = marked.parse(ai.text);
+    aiBody.innerHTML = renderMarkdown(ai.text);
     aiSection.open = !hasQuickGuide;
     reportSection.open = false; // 干货已展示，原始数据默认折叠
   } else {
-    document.getElementById('quick-guide').hidden = true;
+    if (quickGuide) quickGuide.hidden = true;
     aiSection.classList.add('ai-err');
     aiSection.open = true;
     aiBody.innerHTML = `<div class="error-box">⚠️ AI分析失败：${escapeHtml(ai.error || '未知错误')}\n\n请展开下方「原始扫描数据」，手动复制给Gemini/DeepSeek网页版分析。</div>`;
     reportSection.open = true; // AI失败兜底：自动展开原始数据
   }
 
-  reportBody.innerHTML = marked.parse(data.report || '(无数据)');
+  reportBody.innerHTML = renderMarkdown(data.report || '(无数据)');
 }
 
 function escapeHtml(s) {
@@ -456,6 +461,13 @@ function escapeHtml(s) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function renderMarkdown(text) {
+  if (window.marked && typeof window.marked.parse === 'function') {
+    return window.marked.parse(text);
+  }
+  return escapeHtml(text).replace(/\n/g, '<br>');
 }
 
 // ============================================================

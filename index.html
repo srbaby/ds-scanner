@@ -1,167 +1,286 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<link rel="icon" href="favicon.png" />
-<link rel="apple-touch-icon" href="favicon.png" />
-<title>Stock</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
-<link rel="stylesheet" href="css/style.css" />
-</head>
-<body>
+    <head>
+        <meta charset="UTF-8" />
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0, maximum-scale=1.0"
+        />
+        <link rel="icon" href="favicon.png" />
+        <link rel="apple-touch-icon" href="favicon.png" />
+        <title>Stock X-PLAN</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+        <link rel="stylesheet" href="css/style.css" />
+    </head>
+    <body>
+        <!-- Toast -->
+        <div class="toast" id="toast"></div>
 
-<!-- Toast -->
-<div class="toast" id="toast"></div>
-
-<!-- 顶部栏 -->
-<div class="topbar">
-  <div class="topbar-left">
-    <img class="topbar-logo" src="favicon.png" alt="DS">
-    <div class="topbar-title">X-PLAN</div>
-  </div>
-  <div class="topbar-status" id="sync-status">未连接</div>
-</div>
-
-<!-- 认证界面 -->
-<div id="auth-screen">
-  <div class="auth-logo">X-PLAN WAVE SYSTEM</div>
-  <div class="auth-title">Stock Management</div>
-  <div class="auth-sub">输入 GitHub Token 和 Gist ID<br>数据存储在你的私有 Gist 中</div>
-
-  <div>
-    <div class="field-label">GITHUB TOKEN</div>
-    <input type="password" id="input-token" placeholder="ghp_xxxxxxxxxxxx" autocomplete="off">
-  </div>
-  <div>
-    <div class="field-label">GIST ID</div>
-    <input type="text" id="input-gist" placeholder="32位字符串" autocomplete="off">
-  </div>
-  <button class="btn btn-primary" onclick="doAuth()">连接</button>
-  <div class="auth-error" id="auth-err"></div>
-</div>
-
-<!-- 主界面 -->
-<div id="main-screen">
-  <!-- 资产概览 -->
-  <div class="overview max-w">
-    <div class="overview-row">
-      <div class="overview-col">
-        <div class="overview-label">可用资金</div>
-        <div class="overview-cash-edit">
-          <div class="overview-cash" id="display-cash">—</div>
-          <button class="cash-edit-btn" onclick="toggleCashEdit()" title="编辑">✎</button>
+        <!-- 顶部栏 -->
+        <div class="topbar">
+            <div class="topbar-left">
+                <img class="topbar-logo" src="favicon.png" alt="DS" />
+                <div class="topbar-title">Stock X-PLAN</div>
+            </div>
+            <div class="topbar-status" id="sync-status">未连接</div>
         </div>
-      </div>
-      <div class="overview-sub">
-        <div class="overview-stat">
-          <div class="overview-stat-label">持仓</div>
-          <div class="overview-stat-val" id="display-count">0</div>
+
+        <!-- 认证界面 -->
+        <div id="auth-screen">
+            <div class="auth-logo">Stock X-PLAN</div>
+            <div class="auth-title">Stock X-PLAN</div>
+            <div class="auth-sub">
+                输入 GitHub Token 和 Gist ID<br />数据存储在你的私有 Gist 中
+            </div>
+
+            <div>
+                <div class="field-label">GITHUB TOKEN</div>
+                <input
+                    type="password"
+                    id="input-token"
+                    placeholder="ghp_xxxxxxxxxxxx"
+                    autocomplete="off"
+                />
+            </div>
+            <div>
+                <div class="field-label">GIST ID</div>
+                <input
+                    type="text"
+                    id="input-gist"
+                    placeholder="32位字符串"
+                    autocomplete="off"
+                />
+            </div>
+            <button class="btn btn-primary" onclick="doAuth()">连接</button>
+            <div class="auth-error" id="auth-err"></div>
         </div>
-        <div class="overview-stat">
-          <div class="overview-stat-label">同步</div>
-          <div class="overview-stat-val" id="display-sync">—</div>
+
+        <!-- 主界面 -->
+        <div id="main-screen">
+            <!-- 资产概览 -->
+            <div class="overview max-w">
+                <div class="overview-row">
+                    <div class="overview-col">
+                        <div class="overview-label">可用资金</div>
+                        <div class="overview-cash-edit">
+                            <div class="overview-cash" id="display-cash">—</div>
+                            <button
+                                class="cash-edit-btn"
+                                onclick="toggleCashEdit()"
+                                title="编辑"
+                            >
+                                ✎
+                            </button>
+                        </div>
+                    </div>
+                    <div class="overview-sub">
+                        <div class="overview-stat">
+                            <div class="overview-stat-label">持仓</div>
+                            <div class="overview-stat-val" id="display-count">
+                                0
+                            </div>
+                        </div>
+                        <div class="overview-stat">
+                            <div class="overview-stat-label">同步</div>
+                            <div class="overview-stat-val" id="display-sync">
+                                —
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="cash-input-row" id="cash-input-row">
+                    <input
+                        type="number"
+                        id="input-cash"
+                        placeholder="输入金额"
+                        step="0.01"
+                    />
+                    <button
+                        class="btn btn-primary btn-cash-save"
+                        onclick="saveCash()"
+                    >
+                        保存
+                    </button>
+                    <button
+                        class="btn btn-ghost btn-cash-cancel"
+                        onclick="toggleCashEdit()"
+                    >
+                        取消
+                    </button>
+                </div>
+            </div>
+
+            <!-- 快速操作指引 + AI分析（默认折叠） + 原始扫描数据（默认折叠） -->
+            <div class="max-w">
+                <section class="quick-guide" id="quick-guide" hidden>
+                    <div class="quick-guide-head">
+                        <div class="quick-guide-title">快速操作指引</div>
+                        <div class="quick-guide-meta" id="quick-guide-meta">
+                            —
+                        </div>
+                    </div>
+                    <div class="quick-guide-body" id="quick-guide-body"></div>
+                </section>
+
+                <details
+                    class="info-section info-section-primary"
+                    id="ai-section"
+                >
+                    <summary>
+                        完整AI分析<span class="info-meta" id="ai-meta">—</span>
+                    </summary>
+                    <div class="info-body markdown-body" id="ai-body">
+                        <div class="empty-state">
+                            <div class="empty-icon">🤖</div>
+                            <div>暂无今日 AI 分析</div>
+                            <div class="empty-hint">
+                                等待 dashboard.json 推送
+                            </div>
+                        </div>
+                    </div>
+                </details>
+
+                <details class="info-section" id="report-section">
+                    <summary>原始扫描数据（report.txt）</summary>
+                    <div class="info-body markdown-body" id="report-body">
+                        <div class="empty-state">
+                            <div class="empty-icon">📡</div>
+                            <div>暂无扫描数据</div>
+                            <div class="empty-hint">等待 report.txt 推送</div>
+                        </div>
+                    </div>
+                </details>
+            </div>
+
+            <!-- 持仓列表 -->
+            <div class="max-w">
+                <div class="section-header">
+                    <div class="section-title">ACTIVE POSITIONS</div>
+                    <div class="section-actions">
+                        <div class="badge" id="holdings-badge">0</div>
+                        <button
+                            class="json-download-btn"
+                            onclick="downloadHoldings()"
+                            title="下载 holdings.json"
+                        >
+                            ↓ JSON
+                        </button>
+                    </div>
+                </div>
+                <div class="holdings-table-header">
+                    <span>代码</span><span>名称</span><span>数量</span
+                    ><span>成本</span><span>日期</span><span>操作</span>
+                </div>
+                <div id="holdings-list">
+                    <div class="loading-skeleton" id="loading-skeleton">
+                        <div class="sk-card">
+                            <div class="sk-block sk-code"></div>
+                            <div class="sk-block sk-name"></div>
+                            <div class="sk-block sk-btn"></div>
+                        </div>
+                        <div class="sk-card">
+                            <div class="sk-block sk-code"></div>
+                            <div class="sk-block sk-name"></div>
+                            <div class="sk-block sk-btn"></div>
+                        </div>
+                        <div class="sk-card">
+                            <div class="sk-block sk-code"></div>
+                            <div class="sk-block sk-name"></div>
+                            <div class="sk-block sk-btn"></div>
+                        </div>
+                        <div class="loading-spinner">
+                            <span class="spinner"></span>连接 Gist 中…
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FAB -->
+            <div class="fab-area">
+                <button
+                    class="fab"
+                    onclick="openDrawer()"
+                    title="买入建仓"
+                    aria-label="买入建仓"
+                >
+                    +
+                </button>
+            </div>
         </div>
-      </div>
-    </div>
-    <div class="cash-input-row" id="cash-input-row">
-      <input type="number" id="input-cash" placeholder="输入金额" step="0.01">
-      <button class="btn btn-primary btn-cash-save" onclick="saveCash()">保存</button>
-      <button class="btn btn-ghost btn-cash-cancel" onclick="toggleCashEdit()">取消</button>
-    </div>
-  </div>
 
-  <!-- 快速操作指引 + AI分析（默认折叠） + 原始扫描数据（默认折叠） -->
-  <div class="max-w">
-    <section class="quick-guide" id="quick-guide" hidden>
-      <div class="quick-guide-head">
-        <div class="quick-guide-title">快速操作指引</div>
-        <div class="quick-guide-meta" id="quick-guide-meta">—</div>
-      </div>
-      <div class="quick-guide-body" id="quick-guide-body"></div>
-    </section>
+        <!-- 新建持仓抽屉 -->
+        <div
+            class="drawer-overlay"
+            id="drawer-overlay"
+            onclick="closeDrawer()"
+        ></div>
+        <div class="drawer" id="drawer">
+            <div class="drawer-handle"></div>
+            <div class="drawer-title">▸ 买入 / 建仓</div>
+            <div class="drawer-fields">
+                <div>
+                    <div class="field-label">ETF 代码</div>
+                    <input
+                        type="text"
+                        id="new-symbol"
+                        placeholder="如 512480"
+                        inputmode="numeric"
+                        oninput="onSymbolInput(this.value)"
+                        autocomplete="off"
+                    />
+                    <div class="suggest-list" id="suggest-list"></div>
+                </div>
+                <div class="edit-row">
+                    <div class="edit-field">
+                        <div class="field-label">数量（份）</div>
+                        <input
+                            type="number"
+                            id="new-qty"
+                            placeholder="100"
+                            inputmode="numeric"
+                            step="100"
+                        />
+                    </div>
+                    <div class="edit-field">
+                        <div class="field-label">成本价</div>
+                        <input
+                            type="number"
+                            id="new-cost"
+                            placeholder="1.000"
+                            inputmode="decimal"
+                            step="0.001"
+                        />
+                    </div>
+                </div>
+                <div>
+                    <div class="field-label">买入日期</div>
+                    <input type="date" id="new-date" />
+                </div>
+                <div>
+                    <div class="field-label">备注（可选）</div>
+                    <input
+                        type="text"
+                        id="new-comment"
+                        placeholder="如：突破MA20买入"
+                    />
+                </div>
+                <div class="drawer-actions">
+                    <button
+                        class="btn btn-primary drawer-confirm-btn"
+                        onclick="addHolding()"
+                    >
+                        确认买入
+                    </button>
+                    <button
+                        class="btn btn-ghost drawer-cancel-btn"
+                        onclick="closeDrawer()"
+                    >
+                        取消
+                    </button>
+                </div>
+            </div>
+        </div>
 
-    <details class="info-section info-section-primary" id="ai-section">
-      <summary>完整AI分析<span class="info-meta" id="ai-meta">—</span></summary>
-      <div class="info-body markdown-body" id="ai-body">
-        <div class="empty-state"><div class="empty-icon">🤖</div><div>暂无今日 AI 分析</div><div class="empty-hint">等待 dashboard.json 推送</div></div>
-      </div>
-    </details>
-
-    <details class="info-section" id="report-section">
-      <summary>原始扫描数据（report.txt）</summary>
-      <div class="info-body markdown-body" id="report-body">
-        <div class="empty-state"><div class="empty-icon">📡</div><div>暂无扫描数据</div><div class="empty-hint">等待 report.txt 推送</div></div>
-      </div>
-    </details>
-
-  </div>
-
-  <!-- 持仓列表 -->
-  <div class="max-w">
-    <div class="section-header">
-      <div class="section-title">ACTIVE POSITIONS</div>
-      <div class="section-actions">
-        <div class="badge" id="holdings-badge">0</div>
-        <button class="json-download-btn" onclick="downloadHoldings()" title="下载 holdings.json">↓ JSON</button>
-      </div>
-    </div>
-    <div class="holdings-table-header">
-      <span>代码</span><span>名称</span><span>数量</span><span>成本</span><span>日期</span><span>操作</span>
-    </div>
-    <div id="holdings-list">
-      <div class="loading-skeleton" id="loading-skeleton">
-        <div class="sk-card"><div class="sk-block sk-code"></div><div class="sk-block sk-name"></div><div class="sk-block sk-btn"></div></div>
-        <div class="sk-card"><div class="sk-block sk-code"></div><div class="sk-block sk-name"></div><div class="sk-block sk-btn"></div></div>
-        <div class="sk-card"><div class="sk-block sk-code"></div><div class="sk-block sk-name"></div><div class="sk-block sk-btn"></div></div>
-        <div class="loading-spinner"><span class="spinner"></span>连接 Gist 中…</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- FAB -->
-  <div class="fab-area">
-    <button class="fab" onclick="openDrawer()" title="买入建仓" aria-label="买入建仓">+</button>
-  </div>
-</div>
-
-<!-- 新建持仓抽屉 -->
-<div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
-<div class="drawer" id="drawer">
-  <div class="drawer-handle"></div>
-  <div class="drawer-title">▸ 买入 / 建仓</div>
-  <div class="drawer-fields">
-    <div>
-      <div class="field-label">ETF 代码</div>
-      <input type="text" id="new-symbol" placeholder="如 512480" inputmode="numeric"
-             oninput="onSymbolInput(this.value)" autocomplete="off">
-      <div class="suggest-list" id="suggest-list"></div>
-    </div>
-    <div class="edit-row">
-      <div class="edit-field">
-        <div class="field-label">数量（份）</div>
-        <input type="number" id="new-qty" placeholder="100" inputmode="numeric" step="100">
-      </div>
-      <div class="edit-field">
-        <div class="field-label">成本价</div>
-        <input type="number" id="new-cost" placeholder="1.000" inputmode="decimal" step="0.001">
-      </div>
-    </div>
-    <div>
-      <div class="field-label">买入日期</div>
-      <input type="date" id="new-date">
-    </div>
-    <div>
-      <div class="field-label">备注（可选）</div>
-      <input type="text" id="new-comment" placeholder="如：突破MA20买入">
-    </div>
-    <div class="drawer-actions">
-      <button class="btn btn-primary drawer-confirm-btn" onclick="addHolding()">确认买入</button>
-      <button class="btn btn-ghost drawer-cancel-btn" onclick="closeDrawer()">取消</button>
-    </div>
-  </div>
-</div>
-
-<script src="js/app.js"></script>
-</body>
+        <script src="js/app.js"></script>
+    </body>
 </html>

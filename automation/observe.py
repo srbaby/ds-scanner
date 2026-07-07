@@ -566,10 +566,15 @@ def rebuild_history_outputs(
         }
     )
     price_cache = price_cache or {symbol: fetch_historical_closes(symbol, start_day, end_day) for symbol in symbols}
-    index_cache = index_cache or {
-        "H00300": {},
-        "H00905": {},
-    }
+    if index_cache is None:
+        hs300_history = fetch_csindex_closes("H00300", start_day, end_day)
+        csi500_history = fetch_csindex_closes("H00905", start_day, end_day)
+        print(f"✅ 中证全收益指数 H00300: {len(hs300_history)} 天")
+        print(f"✅ 中证全收益指数 H00905: {len(csi500_history)} 天")
+        index_cache = {
+            "H00300": hs300_history,
+            "H00905": csi500_history,
+        }
 
     trades: List[Dict[str, Any]] = []
     snapshots: List[Dict[str, Any]] = []
@@ -939,6 +944,49 @@ def fetch_sina_quotes(symbols: Iterable[str]) -> Dict[str, Dict[str, Any]]:
         return quotes
     except Exception as exc:
         print(f"⚠️ 新浪行情失败: {exc}")
+        return {}
+
+def fetch_csindex_closes(index_code: str, start_day: str, end_day: str) -> Dict[str, float]:
+    start = start_day.replace("-", "")
+    end = end_day.replace("-", "")
+    try:
+        url = (
+            "https://www.csindex.com.cn/csindex-home/perf/index-perf"
+            f"?indexCode={index_code}&startDate={start}&endDate={end}"
+        )
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+                "Accept": "application/json,text/plain,*/*",
+                "Referer": "https://www.csindex.com.cn/",
+            },
+            proxies=PROXIES,
+            timeout=12,
+        )
+        if r.status_code != 200:
+            return {}
+        payload = r.json()
+        rows = payload.get("data") or payload.get("result") or []
+        if isinstance(rows, dict):
+            rows = rows.get("data") or rows.get("rows") or []
+        out: Dict[str, float] = {}
+        for row in rows:
+            raw_day = str(row.get("tradeDate") or row.get("date") or row.get("tradingDate") or "")
+            if re.fullmatch(r"\d{8}", raw_day):
+                day = f"{raw_day[:4]}-{raw_day[4:6]}-{raw_day[6:8]}"
+            else:
+                day = raw_day[:10]
+            for key in ["close", "closePrice", "indexClose", "鎸囨暟鏀剁洏", "鏀剁洏"]:
+                if key in row:
+                    value = to_float(row.get(key), 0)
+                    if value and day:
+                        out[day] = value
+                        break
+        return out
+    except Exception as exc:
+        print(f"鈿狅笍 涓瘉鍏ㄦ敹鐩婃寚鏁板尯闂村け璐?{index_code}: {exc}")
         return {}
 
 

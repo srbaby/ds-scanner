@@ -190,6 +190,32 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual(observe.normalize_symbol("sz588800"), "sh588800")
         self.assertEqual(observe.normalize_symbol("588800"), "sh588800")
 
+    def test_tencent_history_accepts_plain_day_rows(self):
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "data": {
+                        "sh588800": {
+                            "day": [
+                                ["2026-06-18", "1.959", "2.013", "2.018", "1.946", "1939076.000"],
+                                ["2026-06-22", "2.020", "2.022", "2.022", "1.950", "1548457.000"],
+                            ]
+                        }
+                    }
+                }
+
+        old_get = observe.requests.get
+        try:
+            observe.requests.get = lambda *args, **kwargs: FakeResponse()
+            closes = observe.fetch_tencent_closes("sh588800", "2026-06-18", "2026-06-22")
+        finally:
+            observe.requests.get = old_get
+
+        self.assertEqual(closes["2026-06-18"], 2.013)
+        self.assertEqual(closes["2026-06-22"], 2.022)
+
     def test_rebuild_history_uses_buy_date_before_first_snapshot(self):
         daily = [
             {

@@ -150,6 +150,33 @@
                         </div>
                     </div>
                 </details>
+
+                <section class="observer-panel" id="observer-panel">
+                    <div class="observer-head">
+                        <div>
+                            <div class="observer-title">量化观察</div>
+                            <div class="observer-meta" id="observer-meta">
+                                等待线上观察任务
+                            </div>
+                        </div>
+                        <button
+                            class="observer-confirm-btn"
+                            id="observer-confirm-btn"
+                            onclick="confirmObservation()"
+                            title="当前持仓和资金已补录完成"
+                        >
+                            确认观察
+                        </button>
+                    </div>
+                    <div class="observer-kpis" id="observer-kpis"></div>
+                    <div class="observer-chart" id="observer-chart"></div>
+                    <div class="observer-legend" id="observer-legend"></div>
+                    <div class="observer-insight" id="observer-insight"></div>
+                    <div class="observer-progress" id="observer-progress"></div>
+                    <div class="observer-quality" id="observer-quality">
+                        stats.json 尚未生成
+                    </div>
+                </section>
             </div>
 
             <!-- 持仓列表 -->

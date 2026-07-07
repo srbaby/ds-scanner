@@ -118,16 +118,24 @@ def read_gist_files() -> Dict[str, str]:
 
 
 def write_gist_files(files: Dict[str, str]) -> None:
-    payload = {"files": {name: {"content": content} for name, content in files.items()}}
+    safe_files = {
+        name: {"content": content}
+        for name, content in files.items()
+        if content is not None and str(content).strip() != ""
+    }
+    if not safe_files:
+        print("⚠️ 无非空文件需写入，跳过本次 Gist 写入")
+        return
     r = requests.patch(
         f"https://api.github.com/gists/{GIST_ID}",
         headers=gist_headers(),
-        data=json.dumps(payload, ensure_ascii=False),
+        json={"files": safe_files},
         proxies=PROXIES,
         timeout=20,
     )
     if r.status_code != 200:
-        raise RuntimeError(f"Gist 写入失败: HTTP {r.status_code} {r.text[:300]}")
+        sizes = {name: len(str(meta["content"])) for name, meta in safe_files.items()}
+        raise RuntimeError(f"Gist 写入失败: HTTP {r.status_code} {r.text[:300]} | files={sizes}")
 
 
 def parse_json(raw: str, default: Any) -> Any:

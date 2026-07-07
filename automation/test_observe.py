@@ -190,6 +190,57 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual(observe.normalize_symbol("sz588800"), "sh588800")
         self.assertEqual(observe.normalize_symbol("588800"), "sh588800")
 
+    def test_rebuild_history_uses_buy_date_before_first_snapshot(self):
+        daily = [
+            {
+                "day": "2026-05-21",
+                "holdings_canonical": {
+                    "cash_available": 155535.07,
+                    "holdings": [
+                        {
+                            "symbol": "sh512480",
+                            "name": "半导体ETF",
+                            "qty": 12900,
+                            "cost": 2.13,
+                            "buy_date": "2026-05-19",
+                        }
+                    ],
+                },
+            },
+            {
+                "day": "2026-05-25",
+                "holdings_canonical": {
+                    "cash_available": 169000,
+                    "holdings": [
+                        {
+                            "symbol": "sh512480",
+                            "name": "半导体ETF",
+                            "qty": 6500,
+                            "cost": 2.13,
+                            "buy_date": "2026-05-19",
+                        }
+                    ],
+                },
+            },
+        ]
+        price_cache = {"sh512480": {"2026-05-21": 2.2, "2026-05-25": 2.3}}
+        index_cache = {
+            "H00300": {"2026-05-21": 7000.0, "2026-05-25": 7100.0},
+            "H00905": {"2026-05-21": 10000.0, "2026-05-25": 10100.0},
+        }
+
+        updates = observe.rebuild_history_outputs(daily, price_cache, index_cache)
+        trades = observe.parse_jsonl(updates["trades.jsonl"])
+        snapshots = observe.parse_jsonl(updates["portfolio_snapshots.jsonl"])
+        stats = observe.parse_json(updates["stats.json"], {})
+
+        self.assertEqual(trades[0]["date"], "2026-05-19")
+        self.assertEqual(trades[0]["action"], "BUY")
+        self.assertEqual(snapshots[0]["date"], "2026-05-21")
+        self.assertEqual(len(trades), 2)
+        self.assertTrue(stats["data_quality"]["history_rebuilt"])
+        self.assertIn("initial_position_before_first_snapshot", stats["data_quality"]["notes"])
+
 
 if __name__ == "__main__":
     unittest.main()

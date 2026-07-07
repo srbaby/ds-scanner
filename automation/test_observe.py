@@ -148,6 +148,44 @@ class ObserveTests(unittest.TestCase):
         self.assertIn("rolling_3m_window_insufficient", stats["data_quality"]["notes"])
         self.assertIn("return_base_observation_start", stats["data_quality"]["notes"])
 
+    def test_probe_summary_keeps_last_revision_per_day(self):
+        entries = [
+            {
+                "day": "2026-07-01",
+                "version": "v1",
+                "committed_at": "2026-07-01T06:00:00Z",
+                "holdings_canonical": {"cash_available": 200000, "holdings": []},
+            },
+            {
+                "day": "2026-07-01",
+                "version": "v2",
+                "committed_at": "2026-07-01T08:00:00Z",
+                "holdings_canonical": {
+                    "cash_available": 180000,
+                    "holdings": [{"symbol": "sh588800", "qty": 10000}],
+                },
+            },
+            {
+                "day": "2026-07-02",
+                "version": "v3",
+                "committed_at": "2026-07-02T08:00:00Z",
+                "holdings_canonical": {
+                    "cash_available": 191000,
+                    "holdings": [{"symbol": "sh588800", "qty": 5000}],
+                },
+            },
+        ]
+
+        summary = observe.summarize_probe_entries(entries)
+
+        self.assertEqual(summary["revision_count"], 3)
+        self.assertEqual(summary["distinct_days"], 2)
+        self.assertEqual(summary["earliest_version"], "v2")
+        self.assertEqual(summary["earliest_holdings"]["holdings"][0]["qty"], 10000)
+        self.assertEqual(summary["inferred_trade_event_count"], 2)
+        self.assertEqual(summary["inferred_trade_events"][0]["action"], "BUY_OR_ADD")
+        self.assertEqual(summary["inferred_trade_events"][1]["action"], "SELL_OR_REDUCE")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -720,7 +720,7 @@ def build_stats(
     if unreliable_sells:
         honest_notes.append(f"excluded_{len(unreliable_sells)}_backfill_sells_breaching_stop")
     if history_rebuilt:
-        honest_notes.append("realized_stats_backfill_approx; equity_path_has_forgotten_cash_artifacts; mdd_overstated")
+        honest_notes.append("equity_curve_rebuilt_from_real_ths_ledger_202606; realized_winrate_pl_partial_backfill_approx")
     total_return = round((total_asset / performance_base_asset - 1) * 100, 4) if total_asset and performance_base_asset else 0.0
 
     hs300 = bench_stats("hs300_tr", "canonical", "沪深300全收益", "H00300", "000300")

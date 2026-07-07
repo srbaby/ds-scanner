@@ -1,6 +1,5 @@
 name: X-Plan量化观察
 
-# 本地路径去掉了 .github 的点，方便云盘同步；同步到 GitHub 时仍对应 .github/workflows/observe.yml
 on:
   workflow_dispatch:
     inputs:

@@ -584,64 +584,6 @@ function observerProgressRows(rows = []) {
   }).join('');
 }
 
-function renderObserverChart(chartEl, legendEl, series) {
-  const lines = [
-    ['xplan', 'X-Plan', 'solid'],
-    ['hs300', '沪深300全收益', 'dash'],
-    ['csi500', '中证500全收益', 'dot'],
-    ['enhanced_ref', '宽基增强参考', 'longdash'],
-  ].map(([key, label, style]) => ({ key, label, style, points: series[key] || [] }))
-    .filter(line => line.points.length > 0);
-
-  if (!lines.length) {
-    chartEl.innerHTML = '<div class="observer-chart-empty">暂无净值曲线</div>';
-    legendEl.innerHTML = '';
-    return;
-  }
-
-  const all = lines.flatMap(line => line.points.map(p => Number(p.value)).filter(Number.isFinite));
-  const min = Math.min(...all, 95);
-  const max = Math.max(...all, 105);
-  const pad = Math.max((max - min) * 0.12, 2);
-  const lo = min - pad;
-  const hi = max + pad;
-  const width = 640;
-  const height = 220;
-  const left = 34;
-  const right = 14;
-  const top = 16;
-  const bottom = 26;
-  const plotW = width - left - right;
-  const plotH = height - top - bottom;
-  const maxLen = Math.max(...lines.map(line => line.points.length));
-  const xFor = idx => left + (maxLen <= 1 ? plotW : (idx / (maxLen - 1)) * plotW);
-  const yFor = value => top + (1 - (value - lo) / (hi - lo || 1)) * plotH;
-  const dashMap = { solid: '', dash: '8 7', dot: '2 7', longdash: '14 6' };
-
-  const grid = [lo, (lo + hi) / 2, hi].map(v => {
-    const y = yFor(v);
-    return `<line class="observer-grid" x1="${left}" y1="${y}" x2="${width - right}" y2="${y}"></line>
-      <text class="observer-axis" x="2" y="${y + 4}">${v.toFixed(0)}</text>`;
-  }).join('');
-
-  const svgLines = lines.map(line => {
-    const d = line.points.map((p, idx) => `${idx === 0 ? 'M' : 'L'}${xFor(idx).toFixed(1)},${yFor(Number(p.value)).toFixed(1)}`).join(' ');
-    return `<path class="observer-line observer-line-${line.key}" d="${d}" stroke-dasharray="${dashMap[line.style]}"></path>`;
-  }).join('');
-
-  chartEl.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="观察净值曲线">
-    ${grid}
-    ${svgLines}
-  </svg>`;
-
-  legendEl.innerHTML = lines.map(line => {
-    const last = line.points[line.points.length - 1];
-    return `<div class="observer-legend-item observer-legend-${line.key}">
-      <span></span>${escapeHtml(line.label)} ${Number(last.value).toFixed(1)}
-    </div>`;
-  }).join('');
-}
-
 function renderObserverChartInteractive(chartEl, legendEl, series, stats = {}, insightEl = null) {
   const lineDefs = [
     ['xplan', 'X-Plan', 'solid'],

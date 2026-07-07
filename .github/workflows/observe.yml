@@ -7,10 +7,6 @@ on:
         description: "观察日期 YYYY-MM-DD；留空则使用当天"
         required: false
         default: ""
-      mode:
-        description: "运行模式：observe=正常观察写回；probe=只读探测；rebuild-history=重建历史并写回"
-        required: false
-        default: "observe"
   repository_dispatch:
     types: [observe]
 
@@ -35,15 +31,11 @@ jobs:
 
       - name: 运行在线观察任务
         run: |
-          MODE="${{ github.event.inputs.mode }}"
           OBSERVE_DATE="${{ github.event.inputs.observe_date }}"
-          if [ -z "$MODE" ]; then
-            MODE="observe"
-          fi
           if [ -n "$OBSERVE_DATE" ]; then
-            python automation/observe.py --mode "$MODE" --date "$OBSERVE_DATE"
+            python automation/observe.py --date "$OBSERVE_DATE"
           else
-            python automation/observe.py --mode "$MODE"
+            python automation/observe.py
           fi
         env:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}

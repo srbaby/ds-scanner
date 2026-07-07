@@ -516,11 +516,26 @@ def historical_price(
     price_cache: Dict[str, Dict[str, float]],
     fallback: Optional[float] = None,
 ) -> Optional[float]:
-    symbol = normalize_symbol(symbol)
-    close = (price_cache.get(symbol) or {}).get(day)
-    if close:
-        return close
+    price, _ = historical_price_source(symbol, day, price_cache)
+    if price is not None:
+        return price
     return fallback
+
+
+def historical_price_source(
+    symbol: str,
+    day: str,
+    price_cache: Dict[str, Dict[str, float]],
+) -> Tuple[Optional[float], str]:
+    symbol = normalize_symbol(symbol)
+    series = price_cache.get(symbol) or {}
+    close = series.get(day)
+    if close:
+        return close, "exact"
+    previous_days = sorted(price_day for price_day, value in series.items() if price_day < day and value)
+    if previous_days:
+        return series[previous_days[-1]], "carry_forward"
+    return None, "missing"
 
 
 def gross_from_sell_net(net_amount: float) -> Optional[float]:
@@ -716,8 +731,11 @@ def rebuild_history_outputs(
         positions_mv = 0.0
         snapshot_notes: List[str] = []
         for symbol, row in current.items():
-            price = historical_price(symbol, day, price_cache, to_float(row.get("cost")))
-            if not ((price_cache.get(symbol) or {}).get(day)):
+            price, price_source = historical_price_source(symbol, day, price_cache)
+            if price_source == "carry_forward":
+                snapshot_notes.append(f"history_price_carry_forward:{symbol}:{day}")
+            elif price_source == "missing":
+                price = to_float(row.get("cost"))
                 snapshot_notes.append(f"history_price_fallback:{symbol}:{day}")
             positions_mv += (price or 0) * to_int(row.get("qty"))
         hs300_close = index_close("H00300", day)

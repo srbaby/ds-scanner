@@ -216,6 +216,15 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual(closes["2026-06-18"], 2.013)
         self.assertEqual(closes["2026-06-22"], 2.022)
 
+    def test_historical_price_carries_previous_close(self):
+        price_cache = {"sh512480": {"2026-06-18": 2.18, "2026-06-22": 2.21}}
+
+        price, source = observe.historical_price_source("sh512480", "2026-06-19", price_cache)
+
+        self.assertEqual(price, 2.18)
+        self.assertEqual(source, "carry_forward")
+        self.assertEqual(observe.historical_price("sh512480", "2026-06-19", price_cache, 2.13), 2.18)
+
     def test_rebuild_history_uses_buy_date_before_first_snapshot(self):
         daily = [
             {

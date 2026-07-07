@@ -29,7 +29,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
@@ -115,6 +115,58 @@ def read_gist_files() -> Dict[str, str]:
         raise RuntimeError(f"Gist 读取失败: HTTP {r.status_code} {r.text[:200]}")
     files = r.json().get("files", {})
     return {name: meta.get("content", "") for name, meta in files.items()}
+
+
+def github_get_json(url: str) -> Any:
+    if not GIST_ID or not GITHUB_TOKEN:
+        raise RuntimeError("缺少 DS_SCANNER_GIST_ID 或 GITHUB_TOKEN，Gist 探针只能在线只读运行")
+    r = requests.get(url, headers=gist_headers(), proxies=PROXIES, timeout=20)
+    if r.status_code != 200:
+        raise RuntimeError(f"GitHub API 读取失败: HTTP {r.status_code} {r.text[:200]}")
+    return r.json()
+
+
+def gist_file_content(meta: Dict[str, Any]) -> str:
+    content = meta.get("content")
+    if content is not None and not meta.get("truncated"):
+        return str(content)
+    raw_url = meta.get("raw_url")
+    if not raw_url:
+        return ""
+    r = requests.get(raw_url, headers=gist_headers(), proxies=PROXIES, timeout=20)
+    if r.status_code != 200:
+        raise RuntimeError(f"Gist raw 文件读取失败: HTTP {r.status_code} {r.text[:200]}")
+    return r.text
+
+
+def beijing_day(value: str) -> str:
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt.astimezone(timezone(timedelta(hours=8))).date().isoformat()
+    except Exception:
+        return str(value or "")[:10]
+
+
+def read_gist_commits() -> List[Dict[str, Any]]:
+    commits: List[Dict[str, Any]] = []
+    page = 1
+    while True:
+        rows = github_get_json(
+            f"https://api.github.com/gists/{GIST_ID}/commits?per_page=100&page={page}"
+        )
+        if not rows:
+            break
+        commits.extend(rows)
+        if len(rows) < 100:
+            break
+        page += 1
+    return commits
+
+
+def read_gist_version_files(version: str) -> Dict[str, str]:
+    payload = github_get_json(f"https://api.github.com/gists/{GIST_ID}/{version}")
+    files = payload.get("files", {})
+    return {name: gist_file_content(meta) for name, meta in files.items()}
 
 
 def write_gist_files(files: Dict[str, str]) -> None:
@@ -243,6 +295,83 @@ def canonical_holdings(holdings_data: Dict[str, Any]) -> Dict[str, Any]:
 def holdings_hash(holdings_data: Dict[str, Any]) -> str:
     encoded = json.dumps(canonical_holdings(holdings_data), ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+
+def aggregate_qty(holdings_data: Dict[str, Any]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for row in holdings_data.get("holdings") or []:
+        symbol = normalize_symbol(row.get("symbol"))
+        out[symbol] = out.get(symbol, 0) + to_int(row.get("qty"))
+    return {symbol: qty for symbol, qty in sorted(out.items()) if qty > 0}
+
+
+def summarize_probe_entries(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    by_day: Dict[str, Dict[str, Any]] = {}
+    for entry in sorted(entries, key=lambda item: (item.get("day", ""), item.get("committed_at", ""))):
+        holdings = entry.get("holdings_canonical") or {}
+        if not holdings:
+            continue
+        by_day[entry["day"]] = entry
+
+    daily = [by_day[day] for day in sorted(by_day)]
+    inferred_events: List[Dict[str, Any]] = []
+    previous: Dict[str, int] = {}
+    for entry in daily:
+        current = aggregate_qty(entry.get("holdings_canonical") or {})
+        for symbol in sorted(set(previous) | set(current)):
+            delta = current.get(symbol, 0) - previous.get(symbol, 0)
+            if delta > 0:
+                inferred_events.append({"date": entry["day"], "symbol": symbol, "action": "BUY_OR_ADD", "qty_delta": delta})
+            elif delta < 0:
+                inferred_events.append({"date": entry["day"], "symbol": symbol, "action": "SELL_OR_REDUCE", "qty_delta": delta})
+        previous = current
+
+    earliest = daily[0] if daily else {}
+    latest = daily[-1] if daily else {}
+    return {
+        "revision_count": len(entries),
+        "revisions_with_holdings": len([entry for entry in entries if entry.get("holdings_canonical")]),
+        "distinct_days": len(daily),
+        "earliest_date": earliest.get("day"),
+        "latest_date": latest.get("day"),
+        "earliest_version": earliest.get("version"),
+        "latest_version": latest.get("version"),
+        "earliest_holdings": earliest.get("holdings_canonical"),
+        "latest_holdings_hash": holdings_hash(latest.get("holdings_canonical") or {}) if latest else None,
+        "inferred_trade_event_count": len(inferred_events),
+        "inferred_trade_events": inferred_events,
+    }
+
+
+def probe_gist_history() -> Dict[str, Any]:
+    commits = sorted(read_gist_commits(), key=lambda item: item.get("committed_at", ""))
+    entries: List[Dict[str, Any]] = []
+    for commit in commits:
+        version = str(commit.get("version") or "")
+        if not version:
+            continue
+        files = read_gist_version_files(version)
+        raw_holdings = files.get(FILE_HOLDINGS, "")
+        if not raw_holdings:
+            entries.append(
+                {
+                    "version": version,
+                    "committed_at": commit.get("committed_at", ""),
+                    "day": beijing_day(commit.get("committed_at", "")),
+                    "holdings_canonical": None,
+                }
+            )
+            continue
+        holdings = parse_json(raw_holdings, {})
+        entries.append(
+            {
+                "version": version,
+                "committed_at": commit.get("committed_at", ""),
+                "day": beijing_day(commit.get("committed_at", "")),
+                "holdings_canonical": canonical_holdings(holdings),
+            }
+        )
+    return summarize_probe_entries(entries)
 
 
 def next_seq(prefix: str, existing: Iterable[str]) -> int:
@@ -915,10 +1044,22 @@ def observe_once(files: Dict[str, str], target_day: str) -> Dict[str, str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", default=today_text(), help="观察日期 YYYY-MM-DD")
+    parser.add_argument(
+        "--mode",
+        choices=["observe", "probe"],
+        default="observe",
+        help="observe=正常写回观察数据；probe=只读探测 Gist holdings 历史",
+    )
     args = parser.parse_args()
 
-    print(f"📈 X-Plan observe start: {args.date}")
+    print(f"📈 X-Plan {args.mode} start: {args.date}")
     try:
+        if args.mode == "probe":
+            summary = probe_gist_history()
+            print(dump_json(summary))
+            print("✅ probe 完成：未写入任何 Gist 业务文件")
+            return 0
+
         files = read_gist_files()
         updates = observe_once(files, args.date)
         write_gist_files(updates)
@@ -928,7 +1069,7 @@ def main() -> int:
         )
         return 0
     except Exception as exc:
-        print(f"❌ observe 失败: {exc}", file=sys.stderr)
+        print(f"❌ {args.mode} 失败: {exc}", file=sys.stderr)
         return 1
 
 

@@ -9,7 +9,7 @@ on:
         required: false
         default: ""
       mode:
-        description: "运行模式：observe=正常观察写回；probe=只读探测Gist持仓历史"
+        description: "运行模式：observe=正常观察写回；probe=只读探测；rebuild-history=重建历史并写回"
         required: false
         default: "observe"
   repository_dispatch:

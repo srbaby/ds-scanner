@@ -169,6 +169,40 @@ def read_gist_version_files(version: str) -> Dict[str, str]:
     return {name: gist_file_content(meta) for name, meta in files.items()}
 
 
+def fetch_eastmoney_closes(symbol: str, start_day: str, end_day: str) -> Dict[str, float]:
+    symbol = normalize_symbol(symbol)
+    digits = re.sub(r"\D", "", symbol)
+    if len(digits) != 6:
+        return {}
+    market = "1" if symbol.startswith("sh") else "0"
+    try:
+        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+        params = {
+            "secid": f"{market}.{digits}",
+            "fields1": "f1",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57",
+            "klt": "101",
+            "fqt": "1",
+            "beg": start_day.replace("-", ""),
+            "end": end_day.replace("-", ""),
+        }
+        r = requests.get(url, params=params, proxies=PROXIES, timeout=15)
+        if r.status_code != 200:
+            return {}
+        rows = (((r.json() or {}).get("data") or {}).get("klines") or [])
+        out: Dict[str, float] = {}
+        for row in rows:
+            parts = str(row).split(",")
+            if len(parts) >= 3:
+                close = to_float(parts[2], 0)
+                if close:
+                    out[parts[0]] = close
+        return out
+    except Exception as exc:
+        print(f"⚠️ 东方财富历史行情失败 {symbol}: {exc}")
+        return {}
+
+
 def write_gist_files(files: Dict[str, str]) -> None:
     safe_files = {
         name: {"content": content}
@@ -308,15 +342,18 @@ def aggregate_qty(holdings_data: Dict[str, Any]) -> Dict[str, int]:
     return {symbol: qty for symbol, qty in sorted(out.items()) if qty > 0}
 
 
-def summarize_probe_entries(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+def daily_history_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     by_day: Dict[str, Dict[str, Any]] = {}
     for entry in sorted(entries, key=lambda item: (item.get("day", ""), item.get("committed_at", ""))):
         holdings = entry.get("holdings_canonical") or {}
         if not holdings:
             continue
         by_day[entry["day"]] = entry
+    return [by_day[day] for day in sorted(by_day)]
 
-    daily = [by_day[day] for day in sorted(by_day)]
+
+def summarize_probe_entries(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    daily = daily_history_entries(entries)
     inferred_events: List[Dict[str, Any]] = []
     previous: Dict[str, int] = {}
     for entry in daily:
@@ -346,7 +383,7 @@ def summarize_probe_entries(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def probe_gist_history() -> Dict[str, Any]:
+def read_gist_history_entries() -> List[Dict[str, Any]]:
     commits = sorted(read_gist_commits(), key=lambda item: item.get("committed_at", ""))
     entries: List[Dict[str, Any]] = []
     for commit in commits:
@@ -374,7 +411,273 @@ def probe_gist_history() -> Dict[str, Any]:
                 "holdings_canonical": canonical_holdings(holdings),
             }
         )
+    return entries
+
+
+def probe_gist_history() -> Dict[str, Any]:
+    entries = read_gist_history_entries()
     return summarize_probe_entries(entries)
+
+
+def holdings_by_symbol(holdings_data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    by_symbol: Dict[str, Dict[str, Any]] = {}
+    for row in holdings_data.get("holdings") or []:
+        symbol = normalize_symbol(row.get("symbol"))
+        qty = to_int(row.get("qty"))
+        if not symbol or qty <= 0:
+            continue
+        if symbol not in by_symbol:
+            by_symbol[symbol] = dict(row)
+            by_symbol[symbol]["symbol"] = symbol
+            by_symbol[symbol]["qty"] = qty
+            continue
+        existing = by_symbol[symbol]
+        old_qty = to_int(existing.get("qty"))
+        total_qty = old_qty + qty
+        if total_qty > 0:
+            existing["cost"] = round(
+                (to_float(existing.get("cost")) * old_qty + to_float(row.get("cost")) * qty)
+                / total_qty,
+                6,
+            )
+        existing["qty"] = total_qty
+        if not existing.get("buy_date") or str(row.get("buy_date") or "") < str(existing.get("buy_date") or ""):
+            existing["buy_date"] = row.get("buy_date") or existing.get("buy_date")
+    return by_symbol
+
+
+def historical_price(
+    symbol: str,
+    day: str,
+    price_cache: Dict[str, Dict[str, float]],
+    fallback: Optional[float] = None,
+) -> Optional[float]:
+    symbol = normalize_symbol(symbol)
+    close = (price_cache.get(symbol) or {}).get(day)
+    if close:
+        return close
+    return fallback
+
+
+def rebuild_history_outputs(
+    daily: List[Dict[str, Any]],
+    price_cache: Optional[Dict[str, Dict[str, float]]] = None,
+    index_cache: Optional[Dict[str, Dict[str, float]]] = None,
+) -> Dict[str, str]:
+    daily = [entry for entry in sorted(daily, key=lambda item: item.get("day", "")) if entry.get("holdings_canonical")]
+    if not daily:
+        raise RuntimeError("没有可回建的 holdings 历史")
+
+    start_day = daily[0]["day"]
+    end_day = daily[-1]["day"]
+    symbols = sorted(
+        {
+            normalize_symbol(row.get("symbol"))
+            for entry in daily
+            for row in (entry.get("holdings_canonical") or {}).get("holdings", [])
+        }
+    )
+    price_cache = price_cache or {symbol: fetch_eastmoney_closes(symbol, start_day, end_day) for symbol in symbols}
+    index_cache = index_cache or {
+        "H00300": {},
+        "H00905": {},
+    }
+
+    trades: List[Dict[str, Any]] = []
+    snapshots: List[Dict[str, Any]] = []
+    lot_ids: List[str] = []
+    previous: Dict[str, Dict[str, Any]] = {}
+    lot_by_symbol: Dict[str, str] = {}
+    data_notes = [
+        "history_rebuilt_from_gist_revisions",
+        "first_snapshot_from_gist_earliest_day",
+    ]
+
+    def index_close(code: str, day: str) -> Optional[float]:
+        cache = index_cache.setdefault(code, {})
+        if day not in cache:
+            cache[day] = fetch_csindex_close(code, day) or 0
+        return cache.get(day) or None
+
+    def append_trade(row: Dict[str, Any]) -> None:
+        trades.append(row)
+
+    for idx, entry in enumerate(daily):
+        day = entry["day"]
+        holdings = entry.get("holdings_canonical") or {}
+        current = holdings_by_symbol(holdings)
+
+        if idx == 0:
+            for symbol, row in current.items():
+                buy_day = str(row.get("buy_date") or day)
+                lot_id = make_lot_id(symbol, buy_day, lot_ids)
+                lot_ids.append(lot_id)
+                lot_by_symbol[symbol] = lot_id
+                lot = dict(row)
+                lot["lot_id"] = lot_id
+                price = to_float(row.get("cost")) or historical_price(symbol, day, price_cache)
+                append_trade(
+                    build_trade(
+                        make_trade_id(trades),
+                        "BUY",
+                        lot,
+                        to_int(row.get("qty")),
+                        buy_day,
+                        price,
+                        "medium",
+                        "gist_initial_position",
+                        {},
+                    )
+                )
+                if buy_day != day:
+                    data_notes.append("initial_position_before_first_snapshot")
+        else:
+            for symbol in sorted(set(previous) | set(current)):
+                prev = previous.get(symbol)
+                cur = current.get(symbol)
+                prev_qty = to_int(prev.get("qty")) if prev else 0
+                cur_qty = to_int(cur.get("qty")) if cur else 0
+                delta = cur_qty - prev_qty
+                if delta == 0:
+                    continue
+                base = cur or prev or {"symbol": symbol}
+                lot_id = lot_by_symbol.get(symbol)
+                if not lot_id:
+                    lot_id = make_lot_id(symbol, str(base.get("buy_date") or day), lot_ids)
+                    lot_ids.append(lot_id)
+                    lot_by_symbol[symbol] = lot_id
+                lot = dict(base)
+                lot["symbol"] = symbol
+                lot["lot_id"] = lot_id
+                if delta > 0:
+                    action = "ADD" if prev_qty > 0 else "BUY"
+                    price = to_float((cur or {}).get("cost")) or historical_price(symbol, day, price_cache)
+                    append_trade(
+                        build_trade(
+                            make_trade_id(trades),
+                            action,
+                            lot,
+                            delta,
+                            day,
+                            price,
+                            "medium",
+                            "gist_holdings_rebuild",
+                            {},
+                        )
+                    )
+                else:
+                    price = historical_price(symbol, day, price_cache, to_float((prev or {}).get("cost")) or None)
+                    append_trade(
+                        build_trade(
+                            make_trade_id(trades),
+                            "SELL",
+                            lot,
+                            abs(delta),
+                            day,
+                            price,
+                            "medium" if price else "low",
+                            "gist_holdings_rebuild",
+                            {},
+                            open_ref=lot_id,
+                            open_cost=to_float((prev or {}).get("cost")),
+                        )
+                    )
+                if cur_qty <= 0 and symbol in lot_by_symbol:
+                    lot_by_symbol.pop(symbol, None)
+
+        positions_mv = 0.0
+        snapshot_notes: List[str] = []
+        for symbol, row in current.items():
+            price = historical_price(symbol, day, price_cache, to_float(row.get("cost")))
+            if not ((price_cache.get(symbol) or {}).get(day)):
+                snapshot_notes.append(f"history_price_fallback:{symbol}:{day}")
+            positions_mv += (price or 0) * to_int(row.get("qty"))
+        hs300_close = index_close("H00300", day)
+        csi500_close = index_close("H00905", day)
+        if not hs300_close:
+            snapshot_notes.append(f"hs300_tr_missing:{day}")
+        if not csi500_close:
+            snapshot_notes.append(f"csi500_tr_missing:{day}")
+        snapshot = {
+            "date": day,
+            "cash": holdings.get("cash_available", 0),
+            "positions_mv": round(positions_mv, 2),
+            "total_asset": round(to_float(holdings.get("cash_available")) + positions_mv, 2),
+            "benchmarks": {
+                "hs300_tr": {
+                    "code": "H00300",
+                    "name": "沪深300全收益",
+                    "close": hs300_close,
+                    "source": "csindex" if hs300_close else "missing",
+                },
+                "csi500_tr": {
+                    "code": "H00905",
+                    "name": "中证500全收益",
+                    "close": csi500_close,
+                    "source": "csindex" if csi500_close else "missing",
+                },
+                "enhanced_ref": {
+                    "name": "宽基增强参考",
+                    "close": enhanced_close(csi500_close, snapshots, day),
+                    "source": "synthetic",
+                    "is_assumption": True,
+                },
+            },
+            "confidence": "medium",
+            "source": "gist_history_rebuild",
+        }
+        snapshots.append(snapshot)
+        data_notes.extend(snapshot_notes)
+        previous = current
+
+    latest_holdings = daily[-1].get("holdings_canonical") or {}
+    latest_lots: List[Dict[str, Any]] = []
+    for symbol, row in holdings_by_symbol(latest_holdings).items():
+        lot = dict(row)
+        lot["lot_id"] = lot_by_symbol.get(symbol) or make_lot_id(symbol, str(row.get("buy_date") or end_day), lot_ids)
+        latest_lots.append(lot)
+
+    state = {
+        "initialized": True,
+        "history_rebuilt": True,
+        "updated_at": now_text(),
+        "last_processed_hash": holdings_hash(latest_holdings),
+        "last_holdings": latest_lots,
+        "last_cash_available": latest_holdings.get("cash_available", 0),
+        "last_snapshot_date": end_day,
+        "last_new_trade_count": 0,
+        "audit_notes": list(dict.fromkeys(data_notes))[-80:],
+    }
+    stats = build_stats(snapshots, trades, state, list(dict.fromkeys(data_notes)))
+
+    return {
+        FILE_TRADES: dump_jsonl(trades),
+        FILE_SNAPSHOTS: dump_jsonl(snapshots),
+        FILE_STATE: dump_json(state),
+        FILE_STATS: dump_json(stats),
+    }
+
+
+def rebuild_gist_history() -> Dict[str, str]:
+    entries = read_gist_history_entries()
+    daily = daily_history_entries(entries)
+    return rebuild_history_outputs(daily)
+
+
+def rebuild_summary(updates: Dict[str, str]) -> Dict[str, Any]:
+    trades = parse_jsonl(updates.get(FILE_TRADES, ""))
+    snapshots = parse_jsonl(updates.get(FILE_SNAPSHOTS, ""))
+    stats = parse_json(updates.get(FILE_STATS, ""), {})
+    return {
+        "trade_count": len(trades),
+        "snapshot_count": len(snapshots),
+        "first_trade_date": trades[0].get("date") if trades else None,
+        "first_snapshot_date": snapshots[0].get("date") if snapshots else None,
+        "last_snapshot_date": snapshots[-1].get("date") if snapshots else None,
+        "principal": stats.get("principal"),
+        "total_return_pct": (stats.get("summary") or {}).get("total_return_pct"),
+        "history_rebuilt": (stats.get("data_quality") or {}).get("history_rebuilt"),
+    }
 
 
 def next_seq(prefix: str, existing: Iterable[str]) -> int:
@@ -1049,9 +1352,9 @@ def main() -> int:
     parser.add_argument("--date", default=today_text(), help="观察日期 YYYY-MM-DD")
     parser.add_argument(
         "--mode",
-        choices=["observe", "probe"],
+        choices=["observe", "probe", "rebuild-history"],
         default="observe",
-        help="observe=正常写回观察数据；probe=只读探测 Gist holdings 历史",
+        help="observe=正常观察；probe=只读探测历史；rebuild-history=从Gist修订历史重建并写回观察文件",
     )
     args = parser.parse_args()
 
@@ -1061,6 +1364,17 @@ def main() -> int:
             summary = probe_gist_history()
             print(dump_json(summary))
             print("✅ probe 完成：未写入任何 Gist 业务文件")
+            return 0
+
+        if args.mode == "rebuild-history":
+            updates = rebuild_gist_history()
+            summary = rebuild_summary(updates)
+            write_gist_files(updates)
+            print(dump_json(summary))
+            print(
+                "✅ rebuild-history 完成: "
+                f"{FILE_TRADES}, {FILE_SNAPSHOTS}, {FILE_STATS}, {FILE_STATE}"
+            )
             return 0
 
         files = read_gist_files()

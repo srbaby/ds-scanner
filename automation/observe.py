@@ -214,6 +214,51 @@ def fetch_eastmoney_closes(symbol: str, start_day: str, end_day: str) -> Dict[st
         return {}
 
 
+def fetch_tencent_closes(symbol: str, start_day: str, end_day: str) -> Dict[str, float]:
+    symbol = normalize_symbol(symbol)
+    digits = re.sub(r"\D", "", symbol)
+    if len(digits) != 6 or not symbol.startswith(("sh", "sz")):
+        return {}
+    try:
+        url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+        params = {
+            "param": f"{symbol},day,{start_day},{end_day},200,qfq",
+        }
+        r = requests.get(
+            url,
+            params=params,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+                "Accept": "application/json,text/plain,*/*",
+                "Referer": "https://gu.qq.com/",
+            },
+            proxies=PROXIES,
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return {}
+        payload = r.json()
+        rows = (((payload.get("data") or {}).get(symbol) or {}).get("qfqday") or [])
+        out: Dict[str, float] = {}
+        for row in rows:
+            if len(row) >= 3:
+                close = to_float(row[2], 0)
+                if close:
+                    out[str(row[0])] = close
+        return out
+    except Exception as exc:
+        print(f"⚠️ 腾讯历史行情失败 {symbol}: {exc}")
+        return {}
+
+
+def fetch_historical_closes(symbol: str, start_day: str, end_day: str) -> Dict[str, float]:
+    closes = fetch_eastmoney_closes(symbol, start_day, end_day)
+    if closes:
+        return closes
+    return fetch_tencent_closes(symbol, start_day, end_day)
+
+
 def write_gist_files(files: Dict[str, str]) -> None:
     safe_files = {
         name: {"content": content}
@@ -497,7 +542,7 @@ def rebuild_history_outputs(
             for row in (entry.get("holdings_canonical") or {}).get("holdings", [])
         }
     )
-    price_cache = price_cache or {symbol: fetch_eastmoney_closes(symbol, start_day, end_day) for symbol in symbols}
+    price_cache = price_cache or {symbol: fetch_historical_closes(symbol, start_day, end_day) for symbol in symbols}
     index_cache = index_cache or {
         "H00300": {},
         "H00905": {},

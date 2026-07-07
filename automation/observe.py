@@ -169,7 +169,7 @@ def read_gist_version_files(version: str) -> Dict[str, str]:
     return {name: gist_file_content(meta) for name, meta in files.items()}
 
 
-def fetch_eastmoney_closes(symbol: str, start_day: str, end_day: str) -> Dict[str, float]:
+def fetch_eastmoney_closes(symbol: str, start_day: str, end_day: str, quiet: bool = False) -> Dict[str, float]:
     symbol = normalize_symbol(symbol)
     digits = re.sub(r"\D", "", symbol)
     if len(digits) != 6:
@@ -210,7 +210,8 @@ def fetch_eastmoney_closes(symbol: str, start_day: str, end_day: str) -> Dict[st
                     out[parts[0]] = close
         return out
     except Exception as exc:
-        print(f"⚠️ 东方财富历史行情失败 {symbol}: {exc}")
+        if not quiet:
+            print(f"⚠️ 东方财富历史行情失败 {symbol}: {exc}")
         return {}
 
 
@@ -253,10 +254,16 @@ def fetch_tencent_closes(symbol: str, start_day: str, end_day: str) -> Dict[str,
 
 
 def fetch_historical_closes(symbol: str, start_day: str, end_day: str) -> Dict[str, float]:
-    closes = fetch_eastmoney_closes(symbol, start_day, end_day)
+    closes = fetch_eastmoney_closes(symbol, start_day, end_day, quiet=True)
     if closes:
+        print(f"✅ 东方财富历史行情 {symbol}: {len(closes)} 天")
         return closes
-    return fetch_tencent_closes(symbol, start_day, end_day)
+    closes = fetch_tencent_closes(symbol, start_day, end_day)
+    if closes:
+        print(f"✅ 腾讯历史行情 {symbol}: {len(closes)} 天")
+        return closes
+    print(f"⚠️ 历史行情双源失败 {symbol}: 东方财富/腾讯均无数据")
+    return {}
 
 
 def write_gist_files(files: Dict[str, str]) -> None:
@@ -553,6 +560,7 @@ def rebuild_history_outputs(
     lot_ids: List[str] = []
     previous: Dict[str, Dict[str, Any]] = {}
     lot_by_symbol: Dict[str, str] = {}
+    last_index_closes: Dict[str, float] = {}
     data_notes = [
         "history_rebuilt_from_gist_revisions",
         "first_snapshot_from_gist_earliest_day",
@@ -712,10 +720,27 @@ def rebuild_history_outputs(
                 snapshot_notes.append(f"history_price_fallback:{symbol}:{day}")
             positions_mv += (price or 0) * to_int(row.get("qty"))
         hs300_close = index_close("H00300", day)
-        csi500_close = index_close("H00905", day)
-        if not hs300_close:
+        hs300_source = "csindex"
+        if hs300_close:
+            last_index_closes["H00300"] = hs300_close
+        elif last_index_closes.get("H00300"):
+            hs300_close = last_index_closes["H00300"]
+            hs300_source = "carry_forward"
+            snapshot_notes.append(f"hs300_tr_carry_forward_history:{day}")
+        else:
+            hs300_source = "missing"
             snapshot_notes.append(f"hs300_tr_missing:{day}")
-        if not csi500_close:
+
+        csi500_close = index_close("H00905", day)
+        csi500_source = "csindex"
+        if csi500_close:
+            last_index_closes["H00905"] = csi500_close
+        elif last_index_closes.get("H00905"):
+            csi500_close = last_index_closes["H00905"]
+            csi500_source = "carry_forward"
+            snapshot_notes.append(f"csi500_tr_carry_forward_history:{day}")
+        else:
+            csi500_source = "missing"
             snapshot_notes.append(f"csi500_tr_missing:{day}")
         snapshot = {
             "date": day,
@@ -727,13 +752,13 @@ def rebuild_history_outputs(
                     "code": "H00300",
                     "name": "沪深300全收益",
                     "close": hs300_close,
-                    "source": "csindex" if hs300_close else "missing",
+                    "source": hs300_source,
                 },
                 "csi500_tr": {
                     "code": "H00905",
                     "name": "中证500全收益",
                     "close": csi500_close,
-                    "source": "csindex" if csi500_close else "missing",
+                    "source": csi500_source,
                 },
                 "enhanced_ref": {
                     "name": "宽基增强参考",

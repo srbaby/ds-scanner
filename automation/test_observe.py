@@ -225,6 +225,28 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual(source, "carry_forward")
         self.assertEqual(observe.historical_price("sh512480", "2026-06-19", price_cache, 2.13), 2.18)
 
+    def test_csindex_history_accepts_trade_date_rows(self):
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "data": [
+                        {"tradeDate": "20260618", "close": 7341.66},
+                        {"tradeDate": "20260622", "close": 7517.35},
+                    ]
+                }
+
+        old_get = observe.requests.get
+        try:
+            observe.requests.get = lambda *args, **kwargs: FakeResponse()
+            closes = observe.fetch_csindex_closes("H00300", "2026-06-18", "2026-06-22")
+        finally:
+            observe.requests.get = old_get
+
+        self.assertEqual(closes["2026-06-18"], 7341.66)
+        self.assertEqual(closes["2026-06-22"], 7517.35)
+
     def test_rebuild_history_uses_buy_date_before_first_snapshot(self):
         daily = [
             {

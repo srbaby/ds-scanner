@@ -980,7 +980,7 @@ def fetch_csindex_closes(index_code: str, start_day: str, end_day: str) -> Dict[
                 day = f"{raw_day[:4]}-{raw_day[4:6]}-{raw_day[6:8]}"
             else:
                 day = raw_day[:10]
-            for key in ["close", "closePrice", "indexClose", "鎸囨暟鏀剁洏", "鏀剁洏"]:
+            for key in ["close", "closePrice", "indexClose", "指数收盘", "收盘"]:
                 if key in row:
                     value = to_float(row.get(key), 0)
                     if value and day:
@@ -988,7 +988,7 @@ def fetch_csindex_closes(index_code: str, start_day: str, end_day: str) -> Dict[
                         break
         return out
     except Exception as exc:
-        print(f"鈿狅笍 涓瘉鍏ㄦ敹鐩婃寚鏁板尯闂村け璐?{index_code}: {exc}")
+        print(f"⚠️ 中证全收益指数区间失败 {index_code}: {exc}")
         return {}
 
 

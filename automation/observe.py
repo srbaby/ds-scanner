@@ -240,7 +240,8 @@ def fetch_tencent_closes(symbol: str, start_day: str, end_day: str) -> Dict[str,
         if r.status_code != 200:
             return {}
         payload = r.json()
-        rows = (((payload.get("data") or {}).get(symbol) or {}).get("qfqday") or [])
+        data = ((payload.get("data") or {}).get(symbol) or {})
+        rows = data.get("qfqday") or data.get("day") or []
         out: Dict[str, float] = {}
         for row in rows:
             if len(row) >= 3:

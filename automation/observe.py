@@ -186,7 +186,18 @@ def fetch_eastmoney_closes(symbol: str, start_day: str, end_day: str) -> Dict[st
             "beg": start_day.replace("-", ""),
             "end": end_day.replace("-", ""),
         }
-        r = requests.get(url, params=params, proxies=PROXIES, timeout=15)
+        r = requests.get(
+            url,
+            params=params,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+                "Accept": "application/json,text/plain,*/*",
+                "Referer": "https://quote.eastmoney.com/",
+            },
+            proxies=PROXIES,
+            timeout=15,
+        )
         if r.status_code != 200:
             return {}
         rows = (((r.json() or {}).get("data") or {}).get("klines") or [])
@@ -459,6 +470,15 @@ def historical_price(
     return fallback
 
 
+def gross_from_sell_net(net_amount: float) -> Optional[float]:
+    if net_amount <= 0:
+        return None
+    gross_pct = net_amount / (1 - COMMISSION_RATE)
+    if gross_pct * COMMISSION_RATE >= COMMISSION_MIN:
+        return gross_pct
+    return net_amount + COMMISSION_MIN
+
+
 def rebuild_history_outputs(
     daily: List[Dict[str, Any]],
     price_cache: Optional[Dict[str, Dict[str, float]]] = None,
@@ -532,6 +552,7 @@ def rebuild_history_outputs(
                 if buy_day != day:
                     data_notes.append("initial_position_before_first_snapshot")
         else:
+            changes: List[Dict[str, Any]] = []
             for symbol in sorted(set(previous) | set(current)):
                 prev = previous.get(symbol)
                 cur = current.get(symbol)
@@ -540,6 +561,51 @@ def rebuild_history_outputs(
                 delta = cur_qty - prev_qty
                 if delta == 0:
                     continue
+                changes.append(
+                    {
+                        "symbol": symbol,
+                        "prev": prev,
+                        "cur": cur,
+                        "prev_qty": prev_qty,
+                        "cur_qty": cur_qty,
+                        "delta": delta,
+                    }
+                )
+
+            cash_delta = to_float(holdings.get("cash_available")) - to_float((daily[idx - 1].get("holdings_canonical") or {}).get("cash_available"))
+            estimated_buy_cash_out = 0.0
+            for change in changes:
+                if change["delta"] <= 0:
+                    continue
+                cur = change["cur"] or {}
+                symbol = change["symbol"]
+                price = to_float(cur.get("cost")) or historical_price(symbol, day, price_cache) or 0
+                gross = price * change["delta"]
+                estimated_buy_cash_out += gross + commission(gross)
+
+            sell_changes = [change for change in changes if change["delta"] < 0]
+            sell_net_from_cash = cash_delta + estimated_buy_cash_out
+            sell_weights: Dict[str, float] = {}
+            if sell_changes and sell_net_from_cash > 0:
+                for change in sell_changes:
+                    symbol = change["symbol"]
+                    prev = change["prev"] or {}
+                    qty = abs(change["delta"])
+                    price = historical_price(symbol, day, price_cache, to_float(prev.get("cost")) or None) or 0
+                    sell_weights[symbol] = max(price * qty, 0)
+                total_weight = sum(sell_weights.values())
+                if total_weight <= 0:
+                    even_weight = 1 / len(sell_changes)
+                    sell_weights = {change["symbol"]: even_weight for change in sell_changes}
+                data_notes.append("sell_price_inferred_from_cash_delta")
+
+            for change in changes:
+                symbol = change["symbol"]
+                prev = change["prev"]
+                cur = change["cur"]
+                prev_qty = change["prev_qty"]
+                cur_qty = change["cur_qty"]
+                delta = change["delta"]
                 base = cur or prev or {"symbol": symbol}
                 lot_id = lot_by_symbol.get(symbol)
                 if not lot_id:
@@ -566,7 +632,15 @@ def rebuild_history_outputs(
                         )
                     )
                 else:
-                    price = historical_price(symbol, day, price_cache, to_float((prev or {}).get("cost")) or None)
+                    price = historical_price(symbol, day, price_cache, None)
+                    if price is None and sell_changes and sell_net_from_cash > 0:
+                        weight = sell_weights.get(symbol, 0)
+                        total_weight = sum(sell_weights.values())
+                        share = (weight / total_weight) if total_weight > 0 else (1 / len(sell_changes))
+                        gross = gross_from_sell_net(sell_net_from_cash * share)
+                        price = round(gross / abs(delta), 6) if gross and delta else None
+                    if price is None:
+                        price = to_float((prev or {}).get("cost")) or None
                     append_trade(
                         build_trade(
                             make_trade_id(trades),
@@ -1057,7 +1131,10 @@ def build_stats(
     avg_win = sum(to_float(t.get("pnl_amount")) for t in wins) / len(wins) if wins else 0
     avg_loss = abs(sum(to_float(t.get("pnl_amount")) for t in losses) / len(losses)) if losses else 0
     holding_days = []
-    by_lot = {t.get("lot_id"): t for t in trades if t.get("action") in {"BUY", "ADD"}}
+    by_lot: Dict[str, Dict[str, Any]] = {}
+    for trade in trades:
+        if trade.get("action") in {"BUY", "ADD"} and trade.get("lot_id") not in by_lot:
+            by_lot[trade.get("lot_id")] = trade
     for sell in sells:
         buy = by_lot.get(sell.get("open_ref") or sell.get("lot_id"))
         if not buy:

@@ -618,7 +618,15 @@ def build_stats(
     performance_base_asset = to_float(first_snapshot.get("total_asset")) or LEGACY_VIRTUAL_PRINCIPAL
     performance_base_date = first_snapshot.get("date")
     asset_values = [to_float(row.get("total_asset")) for row in snapshots]
-    sells = [t for t in trades if t.get("action") == "SELL" and t.get("pnl_amount") is not None]
+    all_sells = [t for t in trades if t.get("action") == "SELL" and t.get("pnl_amount") is not None]
+    # 回捞卖价按现金流反推，个别卖单 pnl% 越过 -8% 硬止损（机械斩仓下不可能出现）系反推伪值，
+    # 从业绩口径剔除，避免污染胜率/盈亏比/持仓天数解读；真实业绩以净值总收益与基准超额为准。
+    REALIZED_LOSS_FLOOR_PCT = -12.0  # -8% 硬止损 + 约4% 跳空/滑点容差
+    def _sell_credible(t: Dict[str, Any]) -> bool:
+        pct = t.get("pnl_pct")
+        return pct is None or to_float(pct) >= REALIZED_LOSS_FLOOR_PCT
+    unreliable_sells = [t for t in all_sells if not _sell_credible(t)]
+    sells = [t for t in all_sells if _sell_credible(t)]
     wins = [t for t in sells if to_float(t.get("pnl_amount")) > 0]
     losses = [t for t in sells if to_float(t.get("pnl_amount")) < 0]
     avg_win = sum(to_float(t.get("pnl_amount")) for t in wins) / len(wins) if wins else 0
@@ -709,6 +717,10 @@ def build_stats(
         "return_base_observation_start",
     ]
     history_rebuilt = bool(state.get("history_rebuilt", False))
+    if unreliable_sells:
+        honest_notes.append(f"excluded_{len(unreliable_sells)}_backfill_sells_breaching_stop")
+    if history_rebuilt:
+        honest_notes.append("realized_stats_backfill_approx; equity_path_has_forgotten_cash_artifacts; mdd_overstated")
     total_return = round((total_asset / performance_base_asset - 1) * 100, 4) if total_asset and performance_base_asset else 0.0
 
     hs300 = bench_stats("hs300_tr", "canonical", "沪深300全收益", "H00300", "000300")
@@ -743,6 +755,7 @@ def build_stats(
         "data_quality": {
             "trade_count": len(trades),
             "low_confidence_trade_count": len(low_conf),
+            "unreliable_backfill_sell_count": len(unreliable_sells),
             "history_rebuilt": history_rebuilt,
             "snapshot_count": len(snapshots),
             "last_observe_hash": state.get("last_processed_hash"),

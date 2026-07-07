@@ -186,6 +186,10 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual(summary["inferred_trade_events"][0]["action"], "BUY_OR_ADD")
         self.assertEqual(summary["inferred_trade_events"][1]["action"], "SELL_OR_REDUCE")
 
+    def test_normalize_symbol_corrects_wrong_market_prefix(self):
+        self.assertEqual(observe.normalize_symbol("sz588800"), "sh588800")
+        self.assertEqual(observe.normalize_symbol("588800"), "sh588800")
+
 
 if __name__ == "__main__":
     unittest.main()

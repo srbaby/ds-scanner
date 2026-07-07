@@ -186,6 +186,28 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual(summary["inferred_trade_events"][0]["action"], "BUY_OR_ADD")
         self.assertEqual(summary["inferred_trade_events"][1]["action"], "SELL_OR_REDUCE")
 
+    def test_rebuild_history_applies_cutoff_day(self):
+        old_reader = observe.read_gist_history_entries
+        old_rebuild = observe.rebuild_history_outputs
+        captured = {}
+        try:
+            observe.read_gist_history_entries = lambda: [
+                {"day": "2026-07-07", "holdings_canonical": {"cash_available": 1, "holdings": []}},
+                {"day": "2026-07-08", "holdings_canonical": {"cash_available": 1, "holdings": []}},
+            ]
+
+            def fake_rebuild(daily):
+                captured["days"] = [entry["day"] for entry in daily]
+                return {}
+
+            observe.rebuild_history_outputs = fake_rebuild
+            observe.rebuild_gist_history("2026-07-07")
+        finally:
+            observe.read_gist_history_entries = old_reader
+            observe.rebuild_history_outputs = old_rebuild
+
+        self.assertEqual(captured["days"], ["2026-07-07"])
+
     def test_normalize_symbol_corrects_wrong_market_prefix(self):
         self.assertEqual(observe.normalize_symbol("sz588800"), "sh588800")
         self.assertEqual(observe.normalize_symbol("588800"), "sh588800")

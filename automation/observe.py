@@ -826,9 +826,11 @@ def rebuild_history_outputs(
     }
 
 
-def rebuild_gist_history() -> Dict[str, str]:
+def rebuild_gist_history(cutoff_day: Optional[str] = None) -> Dict[str, str]:
     entries = read_gist_history_entries()
     daily = daily_history_entries(entries)
+    if cutoff_day:
+        daily = [entry for entry in daily if entry.get("day", "") <= cutoff_day]
     return rebuild_history_outputs(daily)
 
 
@@ -1581,7 +1583,7 @@ def main() -> int:
             return 0
 
         if args.mode == "rebuild-history":
-            updates = rebuild_gist_history()
+            updates = rebuild_gist_history(args.date)
             summary = rebuild_summary(updates)
             write_gist_files(updates)
             print(dump_json(summary))

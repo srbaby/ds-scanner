@@ -153,6 +153,25 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual(observe.normalize_symbol("sz588800"), "sh588800")
         self.assertEqual(observe.normalize_symbol("588800"), "sh588800")
 
+    def test_backfill_sell_breaching_stop_excluded_from_stats(self):
+        # -8% 硬止损下不可能出现的 -50% 卖单（回捞反推伪值）应被剔除，
+        # 只用可信卖单算胜率/盈亏比；剔除计数进 data_quality。
+        trades = [
+            {"action": "SELL", "pnl_amount": -21000, "pnl_pct": -50.0, "lot_id": "a", "date": "2026-06-29"},
+            {"action": "SELL", "pnl_amount": 2000, "pnl_pct": 9.5, "lot_id": "b", "date": "2026-06-03"},
+            {"action": "SELL", "pnl_amount": -1000, "pnl_pct": -6.0, "lot_id": "c", "date": "2026-05-29"},
+        ]
+        snapshots = [
+            {"date": "2026-05-21", "total_asset": 100000.0, "benchmarks": {"hs300_tr": {"close": 100.0}}},
+            {"date": "2026-07-07", "total_asset": 114000.0, "benchmarks": {"hs300_tr": {"close": 100.0}}},
+        ]
+        stats = observe.build_stats(snapshots, trades, {"initialized": True, "history_rebuilt": True}, [])
+        s = stats["summary"]
+        # 2 可信卖单：1 胜 1 负 → 胜率 50%，盈亏比 2000/1000=2.0；-50% 那笔不计入
+        self.assertEqual(s["win_rate_pct"], 50.0)
+        self.assertEqual(s["profit_loss_ratio"], 2.0)
+        self.assertEqual(stats["data_quality"]["unreliable_backfill_sell_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

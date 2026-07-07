@@ -1,0 +1,21 @@
+# 本地私有文档：方法论/协作规范/交接记录，不进公开仓库
+CLAUDE.md
+X-Plan.md
+Gemini_API_验证与转正方案.md
+观察模块_进度交接.md
+
+# 旧的无点前缀本地镜像文件夹，已被真正的 .github/ 取代
+github/
+
+# 低频手动维护的 Gemini 改分指引，非代码
+data/etf_base_config/
+
+# CF Worker 源码存档，实际部署在 Cloudflare（DS_WORKER），不经此仓库
+automation/cf_worker_trigger.js
+
+# Python 缓存
+automation/__pycache__/
+*.pyc
+
+# Claude Code 本地会话设置
+.claude/

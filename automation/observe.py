@@ -250,12 +250,15 @@ def normalize_symbol(raw: Any) -> str:
     digits = re.sub(r"\D", "", text)
     if len(digits) != 6:
         return text
-    if text.startswith(("sh", "sz", "bj")):
-        return text[:2] + digits
+    inferred_prefix = ""
     if re.match(r"^(60|65|68|50|51|52|56|58)", digits):
-        return "sh" + digits
-    if re.match(r"^(00|30|15|16|18)", digits):
-        return "sz" + digits
+        inferred_prefix = "sh"
+    elif re.match(r"^(00|30|15|16|18)", digits):
+        inferred_prefix = "sz"
+    if text.startswith(("sh", "sz", "bj")):
+        return (inferred_prefix or text[:2]) + digits
+    if inferred_prefix:
+        return inferred_prefix + digits
     return "sh" + digits
 
 

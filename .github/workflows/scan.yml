@@ -23,8 +23,11 @@ jobs:
           # ✨ 新增：让缓存插件去扫描你的脚本文件，完美适配你的无依赖文件架构
           cache-dependency-path: |
             automation/ds_scanner.py
+            automation/ai_review.py
             automation/generate_dashboard.py
-            automation/gemini_reliability_check.py
+            automation/send_report.py
+            automation/versioning.py
+            VERSION.json
 
       - name: 安装Python依赖
         run: pip install requests pandas akshare lxml beautifulsoup4
@@ -56,13 +59,3 @@ jobs:
         env:
           BARK_KEY: ${{ secrets.BARK_KEY }}
           BARK_KEY_WIFE: ${{ secrets.BARK_KEY_WIFE }}
-
-      - name: Gemini API可靠性验证并Bark推送
-        run: python automation/gemini_reliability_check.py
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-3.5-flash
-          BARK_KEY: ${{ secrets.BARK_KEY }}
-          BARK_KEY_WIFE: ${{ secrets.BARK_KEY_WIFE }}
-        # 影子验证失败不影响扫描报告与正式DeepSeek看板
-        continue-on-error: true

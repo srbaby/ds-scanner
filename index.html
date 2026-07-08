@@ -21,6 +21,7 @@
             <div class="topbar-left">
                 <img class="topbar-logo" src="favicon.png" alt="DS" />
                 <div class="topbar-title">Stock X</div>
+                <div class="topbar-version" id="app-version">v3.0</div>
             </div>
             <div class="topbar-status" id="sync-status">未连接</div>
         </div>
@@ -108,6 +109,25 @@
                         取消
                     </button>
                 </div>
+            </div>
+
+            <!-- 操作流水 -->
+            <div class="max-w">
+                <section class="execution-panel">
+                    <div class="execution-head">
+                        <div>
+                            <div class="execution-title">操作记录</div>
+                            <div class="execution-meta" id="execution-meta">
+                                今日操作与最近更正会保留在 Gist
+                            </div>
+                        </div>
+                    </div>
+                    <div id="execution-list" class="execution-list">
+                        <div class="empty-state">
+                            <div>暂无操作记录</div>
+                        </div>
+                    </div>
+                </section>
             </div>
 
             <!-- 快速操作指引 + AI分析（默认折叠） + 原始扫描数据（默认折叠） -->
@@ -266,6 +286,7 @@
                             placeholder="100"
                             inputmode="numeric"
                             step="100"
+                            oninput="updateNewPreview()"
                         />
                     </div>
                     <div class="edit-field">
@@ -276,6 +297,7 @@
                             placeholder="1.000"
                             inputmode="decimal"
                             step="0.001"
+                            oninput="updateNewPreview()"
                         />
                     </div>
                 </div>
@@ -284,12 +306,22 @@
                     <input type="date" id="new-date" />
                 </div>
                 <div>
-                    <div class="field-label">备注（可选）</div>
+                    <div class="field-label">操作依据</div>
+                    <select id="new-reason"></select>
+                </div>
+                <div>
+                    <div class="field-label">操作后可用资金</div>
                     <input
-                        type="text"
-                        id="new-comment"
-                        placeholder="如：突破MA20买入"
+                        type="number"
+                        id="new-cash"
+                        placeholder="输入操作后的可用资金"
+                        inputmode="decimal"
+                        step="0.01"
+                        oninput="updateNewPreview()"
                     />
+                </div>
+                <div class="operation-preview" id="new-preview">
+                    填写后显示持仓与资金变化
                 </div>
                 <div class="drawer-actions">
                     <button
@@ -307,6 +339,37 @@
                 </div>
             </div>
         </div>
+
+        <!-- 减仓 / 清仓 / 更正操作 -->
+        <dialog class="operation-dialog" id="operation-dialog">
+            <form method="dialog" onsubmit="return false;">
+                <div class="drawer-title" id="operation-dialog-title">登记操作</div>
+                <input type="hidden" id="operation-index" />
+                <input type="hidden" id="operation-mode" />
+                <input type="hidden" id="operation-event-id" />
+                <div id="operation-qty-wrap">
+                    <div class="field-label">操作后剩余份额</div>
+                    <input type="number" id="operation-qty" inputmode="numeric" step="100" />
+                </div>
+                <div id="operation-cost-wrap">
+                    <div class="field-label">操作后持仓成本</div>
+                    <input type="number" id="operation-cost" inputmode="decimal" step="0.001" />
+                </div>
+                <div id="operation-cash-wrap">
+                    <div class="field-label">操作后可用资金</div>
+                    <input type="number" id="operation-cash" inputmode="decimal" step="0.01" />
+                </div>
+                <div>
+                    <div class="field-label">操作依据</div>
+                    <select id="operation-reason"></select>
+                </div>
+                <div class="operation-preview" id="operation-preview"></div>
+                <div class="drawer-actions">
+                    <button class="btn btn-primary drawer-confirm-btn" onclick="confirmOperationDialog()">确认登记</button>
+                    <button class="btn btn-ghost drawer-cancel-btn" onclick="closeOperationDialog()">取消</button>
+                </div>
+            </form>
+        </dialog>
 
         <script src="js/app.js"></script>
     </body>

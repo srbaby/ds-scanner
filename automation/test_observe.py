@@ -38,8 +38,8 @@ class ObserveTests(unittest.TestCase):
             )
         }
         out = observe.observe_once(files, "2026-07-07")
-        trades = observe.parse_jsonl(out["trades.jsonl"])
-        snapshots = observe.parse_jsonl(out["portfolio_snapshots.jsonl"])
+        trades = observe.parse_jsonl(out["trades_2026.jsonl"])
+        snapshots = observe.parse_jsonl(out["portfolio_snapshots_2026.jsonl"])
         state = observe.parse_json(out["observer_state.json"], {})
 
         self.assertEqual(trades, [])
@@ -71,16 +71,41 @@ class ObserveTests(unittest.TestCase):
                 "holdings_canonical": observe.canonical_holdings(json.loads(files["holdings.json"])),
             }
         )
+        files["dashboard.json"] = j(
+            {
+                "methodology_version": "v3.0",
+                "ai": {
+                    "text": "\n".join(
+                        [
+                            "【操作清单】",
+                            "| 操作编号 | 类型 | 代码 | 名称 | 当前目标仓位% | 今日目标仓位% | 调整仓位 | 规则代码 | 信号等级 | 中文操作依据 | 关键指标 |",
+                            "|---|---|---|---|---:|---:|---:|---|---|---|---|",
+                            "| OP-01 | BUY | sh588800 | 科创100ETF | 0% | 10% | +10% | B_INITIAL_BUY | B | 普通信号首次建仓至10% | 评分:76 量比:1.30 MA20偏离:+2.5% 资金流:💰流入 超额沪深300:+1.2% |",
+                        ]
+                    )
+                },
+            }
+        )
 
         out2 = observe.observe_once(files, "2026-07-07")
-        trades = observe.parse_jsonl(out2["trades.jsonl"])
+        trades = observe.parse_jsonl(out2["trades_2026.jsonl"])
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades[0]["action"], "BUY")
         self.assertEqual(trades[0]["confidence"], "high")
+        self.assertEqual(trades[0]["methodology_version"], "v3.0")
+        self.assertEqual(trades[0]["rule_code"], "B_INITIAL_BUY")
+        self.assertEqual(trades[0]["entry_rule_code"], "B_INITIAL_BUY")
+        self.assertEqual(trades[0]["signal_grade"], "B")
+        self.assertEqual(trades[0]["target_position_after_pct"], 10)
+        self.assertEqual(trades[0]["score"], 76)
+        self.assertEqual(trades[0]["vol_ratio"], 1.3)
+        self.assertEqual(trades[0]["ma20_deviation_pct"], 2.5)
+        self.assertEqual(trades[0]["fund_flow"], "💰流入")
+        self.assertEqual(trades[0]["relative_hs300_strength_pct"], 1.2)
 
         files.update(out2)
         out3 = observe.observe_once(files, "2026-07-07")
-        self.assertEqual(len(observe.parse_jsonl(out3["trades.jsonl"])), 1)
+        self.assertEqual(len(observe.parse_jsonl(out3["trades_2026.jsonl"])), 1)
 
     def test_reduction_generates_sell_with_pnl(self):
         state = {
@@ -113,7 +138,7 @@ class ObserveTests(unittest.TestCase):
             ),
         }
         out = observe.observe_once(files, "2026-07-08")
-        trades = observe.parse_jsonl(out["trades.jsonl"])
+        trades = observe.parse_jsonl(out["trades_2026.jsonl"])
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades[0]["action"], "SELL")
         self.assertEqual(trades[0]["qty"], 5000)
@@ -197,6 +222,68 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual(s["win_rate_pct"], 50.0)
         self.assertEqual(s["profit_loss_ratio"], 2.0)
         self.assertEqual(stats["data_quality"]["unreliable_backfill_sell_count"], 1)
+
+    def test_execution_event_reason_correction_and_reverse(self):
+        events = [
+            {
+                "event_id": "evt-1",
+                "event_type": "BUY",
+                "action": "BUY",
+                "trade_date": "2026-07-09",
+                "symbol": "sh588800",
+                "rule_code": "B_INITIAL_BUY",
+                "reason_zh": "普通信号建仓",
+            },
+            {
+                "event_id": "evt-2",
+                "event_type": "CORRECT_REASON",
+                "target_event_id": "evt-1",
+                "rule_code": "A_INITIAL_BUY",
+                "reason_zh": "强信号建仓",
+            },
+        ]
+        effective = observe.effective_execution_events(events)
+        self.assertEqual(len(effective), 1)
+        self.assertEqual(effective[0]["rule_code"], "A_INITIAL_BUY")
+        self.assertEqual(effective[0]["reason_zh"], "强信号建仓")
+
+        events.append(
+            {
+                "event_id": "evt-3",
+                "event_type": "REVERSE_EVENT",
+                "target_event_id": "evt-1",
+            }
+        )
+        self.assertEqual(observe.effective_execution_events(events), [])
+
+    def test_legacy_files_migrate_to_yearly_files_once(self):
+        legacy_trade = {
+            "trade_id": "t0001",
+            "date": "2026-07-01",
+            "action": "BUY",
+            "symbol": "sh588800",
+            "lot_id": "sh588800#20260701#01",
+            "qty": 100,
+            "price": 2.0,
+        }
+        legacy_snapshot = {
+            "date": "2026-07-01",
+            "cash": 100000,
+            "positions_mv": 200,
+            "total_asset": 100200,
+            "benchmarks": {},
+        }
+        files = {
+            "holdings.json": j({"cash_available": 100000, "holdings": []}),
+            "trades.jsonl": json.dumps(legacy_trade, ensure_ascii=False) + "\n",
+            "portfolio_snapshots.jsonl": json.dumps(legacy_snapshot, ensure_ascii=False) + "\n",
+        }
+        out = observe.observe_once(files, "2026-07-09")
+        trades = observe.parse_jsonl(out["trades_2026.jsonl"])
+        manifest = observe.parse_json(out["data_manifest.json"], {})
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(manifest["files"]["trades_2026.jsonl"]["row_count"], 1)
+        self.assertEqual(manifest["legacy_files"]["trades.jsonl"]["status"], "read_only_archive")
 
 
 if __name__ == "__main__":

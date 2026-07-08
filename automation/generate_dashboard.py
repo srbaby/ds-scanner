@@ -38,6 +38,12 @@ from datetime import datetime
 import requests
 
 from ai_review import call_deepseek, DEEPSEEK_MODEL
+from versioning import (
+    DATA_SCHEMA_VERSION,
+    METHODOLOGY_VERSION,
+    PROMPT_CONTRACT_VERSION,
+    validate_document_versions,
+)
 
 PROXIES = {"http": None, "https": None}
 
@@ -45,7 +51,6 @@ GIST_ID = os.environ.get("DS_SCANNER_GIST_ID", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 DASHBOARD_FILE = "dashboard.json"
-METHODOLOGY_VERSION = "v2.8"
 
 
 def _gist_headers():
@@ -89,6 +94,7 @@ def write_dashboard(data: dict) -> bool:
 
 
 def main():
+    validate_document_versions()
     with open("report.txt", "r", encoding="utf-8") as f:
         report_text = f.read()
 
@@ -102,6 +108,8 @@ def main():
     data = {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "methodology_version": METHODOLOGY_VERSION,
+        "prompt_contract_version": PROMPT_CONTRACT_VERSION,
+        "data_schema_version": DATA_SCHEMA_VERSION,
         "report": report_text,
         "ai": {
             "provider": "deepseek",

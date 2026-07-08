@@ -32,6 +32,7 @@ from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
+from versioning import DATA_SCHEMA_VERSION, METHODOLOGY_VERSION, validate_document_versions
 
 os.environ["TZ"] = "Asia/Shanghai"
 if hasattr(time, "tzset"):
@@ -63,6 +64,19 @@ FILE_TRADES = "trades.jsonl"
 FILE_SNAPSHOTS = "portfolio_snapshots.jsonl"
 FILE_STATS = "stats.json"
 FILE_STATE = "observer_state.json"
+FILE_MANIFEST = "data_manifest.json"
+
+
+def execution_file(year: str) -> str:
+    return f"execution_events_{year}.jsonl"
+
+
+def trades_file(year: str) -> str:
+    return f"trades_{year}.jsonl"
+
+
+def snapshots_file(year: str) -> str:
+    return f"portfolio_snapshots_{year}.jsonl"
 
 ETF_NAMES = {
     "sh588000": "科创50ETF",
@@ -213,6 +227,224 @@ def commission(amount: float) -> float:
     if amount <= 0:
         return 0.0
     return round(max(amount * COMMISSION_RATE, COMMISSION_MIN), 2)
+
+
+def parse_percent(value: Any) -> Optional[float]:
+    text = str(value or "").strip()
+    if not text or text in {"-", "—", "无"}:
+        return None
+    m = re.search(r"[-+]?\d+(?:\.\d+)?", text.replace(",", ""))
+    return round(to_float(m.group(0)), 4) if m else None
+
+
+def normalize_decision_action(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    if text in {"BUY", "ADD", "REDUCE", "SELL", "HOLD", "SKIP", "WATCH"}:
+        return text
+    raw_text = str(raw or "")
+    if re.search(r"减仓", raw_text):
+        return "REDUCE"
+    if re.search(r"卖出|清仓|止损", raw_text):
+        return "SELL"
+    if re.search(r"买入", raw_text):
+        return "BUY"
+    if re.search(r"加仓", raw_text):
+        return "ADD"
+    if re.search(r"持有", raw_text):
+        return "HOLD"
+    if re.search(r"观察|待确认", raw_text):
+        return "WATCH"
+    if re.search(r"不开|不操作|跳过|观望", raw_text):
+        return "SKIP"
+    return ""
+
+
+def extract_metric(text: str, patterns: List[str]) -> Optional[float]:
+    for pattern in patterns:
+        m = re.search(pattern, text, flags=re.I)
+        if m:
+            return round(to_float(m.group(1)), 4)
+    return None
+
+
+def extract_fund_flow(text: str) -> str:
+    m = re.search(r"(💰流入|💸流出|➖平衡|流入|流出|平衡)", text)
+    if m:
+        value = m.group(1)
+        if value == "流入":
+            return "💰流入"
+        if value == "流出":
+            return "💸流出"
+        if value == "平衡":
+            return "➖平衡"
+        return value
+    m = re.search(r"资金流(?:向)?\s*[:：=]\s*([^,，;；\s]+)", text)
+    return m.group(1)[:20] if m else ""
+
+
+def parse_ai_decisions(dashboard: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """解析 AI 操作清单表格，供 trades.jsonl 写入结构化依据。"""
+    ai_text = str((dashboard.get("ai") or {}).get("text") or "")
+    methodology_version = str(dashboard.get("methodology_version") or "")
+    decisions: List[Dict[str, Any]] = []
+    header: List[str] = []
+
+    for raw_line in ai_text.splitlines():
+        line = raw_line.strip()
+        if "|" not in line:
+            continue
+        cols = [c.strip() for c in line.strip("|").split("|")]
+        if len(cols) < 8:
+            continue
+        if "类型" in cols and "代码" in cols:
+            header = cols
+            continue
+        if re.fullmatch(r"[-:\s]+", cols[0]):
+            continue
+        row = {name: cols[idx] if idx < len(cols) else "" for idx, name in enumerate(header)} if header else {}
+        action = normalize_decision_action(row.get("类型") or cols[0])
+        if not action:
+            continue
+        symbol = normalize_symbol(row.get("代码") or cols[1])
+        if not re.search(r"\d{6}$", symbol):
+            continue
+        is_v3 = bool(row.get("操作编号"))
+        signal_basis = (
+            row.get("中文操作依据")
+            or row.get("关键信号")
+            or (" | ".join(c for c in cols[8:] if c).strip() if len(cols) > 8 else "")
+        )
+        metrics_text = row.get("关键指标") or row.get("关键信号") or signal_basis
+        basis_text = " ".join([signal_basis, " ".join(cols)])
+        decisions.append(
+            {
+                "methodology_version": methodology_version,
+                "ai_action_id": row.get("操作编号") or "",
+                "decision_action": action,
+                "symbol": symbol,
+                "name": row.get("名称") or (cols[2] if len(cols) > 2 else ""),
+                "target_position_before_pct": parse_percent(
+                    row.get("当前目标仓位%") or row.get("当前仓位%") or (cols[3] if not is_v3 and len(cols) > 3 else None)
+                ),
+                "target_position_after_pct": parse_percent(
+                    row.get("今日目标仓位%") or row.get("今日目标%") or (cols[4] if not is_v3 and len(cols) > 4 else None)
+                ),
+                "position_delta_pct": parse_percent(row.get("调整仓位") or (cols[5] if not is_v3 and len(cols) > 5 else None)),
+                "rule_code": (row.get("规则代码") or (cols[6] if not is_v3 and len(cols) > 6 else "")).strip(),
+                "signal_grade": (row.get("信号等级") or (cols[7] if not is_v3 and len(cols) > 7 else "")).strip(),
+                "signal_basis": signal_basis,
+                "reason_zh": signal_basis,
+                "score": extract_metric(metrics_text, [r"(?:评分|score)\s*[:：=]?\s*([-+]?\d+(?:\.\d+)?)"]),
+                "vol_ratio": extract_metric(metrics_text, [r"(?:量比|vol(?:ume)?_?ratio)\s*[:：=]?\s*([-+]?\d+(?:\.\d+)?)"]),
+                "ma20_deviation_pct": extract_metric(
+                    metrics_text,
+                    [r"(?:MA20偏离|ma20_deviation(?:_pct)?)\s*[:：=]?\s*([-+]?\d+(?:\.\d+)?)%?"],
+                ),
+                "relative_hs300_strength_pct": extract_metric(
+                    metrics_text,
+                    [r"(?:超额沪深300|相对沪深300|relative_hs300_strength(?:_pct)?)\s*[:：=]?\s*([-+]?\d+(?:\.\d+)?)%?"],
+                ),
+                "fund_flow": extract_fund_flow(metrics_text),
+            }
+        )
+    return decisions
+
+
+def effective_execution_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """应用更正/撤销事件，返回可用于交易归因的有效执行事件。"""
+    reversed_ids = {
+        str(row.get("target_event_id"))
+        for row in events
+        if row.get("event_type") == "REVERSE_EVENT" and row.get("target_event_id")
+    }
+    corrections: Dict[str, Dict[str, Any]] = {}
+    for row in events:
+        if row.get("event_type") == "CORRECT_REASON" and row.get("target_event_id"):
+            corrections[str(row["target_event_id"])] = row
+
+    out = []
+    for row in events:
+        if row.get("event_type") in {"CORRECT_REASON", "REVERSE_EVENT"}:
+            continue
+        event_id = str(row.get("event_id") or "")
+        if event_id in reversed_ids:
+            continue
+        item = dict(row)
+        correction = corrections.get(event_id)
+        if correction:
+            for key in [
+                "ai_action_id",
+                "rule_code",
+                "signal_grade",
+                "reason_zh",
+                "target_position_before_pct",
+                "target_position_after_pct",
+                "position_delta_pct",
+                "data_confidence",
+            ]:
+                if correction.get(key) is not None:
+                    item[key] = correction.get(key)
+            item["reason_corrected_by"] = correction.get("event_id")
+        out.append(item)
+    return out
+
+
+def execution_event_decisions(events: List[Dict[str, Any]], trade_day: str) -> List[Dict[str, Any]]:
+    decisions = []
+    for event in effective_execution_events(events):
+        action = normalize_decision_action(event.get("action") or event.get("event_type"))
+        symbol = normalize_symbol(event.get("symbol"))
+        if not action or not symbol or str(event.get("trade_date") or "") != trade_day:
+            continue
+        decisions.append(
+            {
+                "methodology_version": event.get("methodology_version") or METHODOLOGY_VERSION,
+                "ai_action_id": event.get("ai_action_id") or "",
+                "decision_action": action,
+                "symbol": symbol,
+                "name": event.get("name") or "",
+                "target_position_before_pct": event.get("target_position_before_pct"),
+                "target_position_after_pct": event.get("target_position_after_pct"),
+                "position_delta_pct": event.get("position_delta_pct"),
+                "rule_code": event.get("rule_code") or "MANUAL_BACKFILL",
+                "signal_grade": event.get("signal_grade") or "UNKNOWN",
+                "signal_basis": event.get("reason_zh") or "",
+                "reason_zh": event.get("reason_zh") or "",
+                "execution_event_id": event.get("event_id"),
+                "execution_price": event.get("execution_price"),
+                "price_source": event.get("price_source") or "not_provided",
+                "data_confidence": event.get("data_confidence") or "manual",
+                "score": event.get("score"),
+                "vol_ratio": event.get("vol_ratio"),
+                "ma20_deviation_pct": event.get("ma20_deviation_pct"),
+                "relative_hs300_strength_pct": event.get("relative_hs300_strength_pct"),
+                "fund_flow": event.get("fund_flow"),
+            }
+        )
+    return decisions
+
+
+def match_trade_decision(action: str, symbol: str, decisions: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    symbol = normalize_symbol(symbol)
+    action = action.upper()
+    if action == "SELL":
+        preferred_actions = ["SELL", "REDUCE"]
+    elif action == "BUY":
+        preferred_actions = ["BUY"]
+    else:
+        preferred_actions = [action]
+
+    for expected in preferred_actions:
+        for row in decisions:
+            if row.get("symbol") == symbol and row.get("decision_action") == expected:
+                return row
+    for row in decisions:
+        if row.get("symbol") == symbol and row.get("decision_action") not in {"HOLD", "SKIP", "WATCH"}:
+            return row
+    for row in decisions:
+        if row.get("symbol") == symbol:
+            return row
+    return None
 
 
 def canonical_holdings(holdings_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -389,6 +621,29 @@ def infer_trade_reason(action: str, symbol: str, dashboard: Dict[str, Any]) -> s
     return "AI操作清单/持仓变更推导" if action in {"BUY", "ADD", "SELL"} else "自动观察"
 
 
+def estimate_total_position_pct(
+    lots: List[Dict[str, Any]],
+    cash_available: float,
+    quotes: Dict[str, Dict[str, Any]],
+) -> Optional[float]:
+    positions_mv = 0.0
+    for lot in lots:
+        symbol = lot.get("symbol")
+        price = quotes.get(symbol, {}).get("price") or to_float(lot.get("cost"))
+        positions_mv += price * to_int(lot.get("qty"))
+    total_asset = positions_mv + to_float(cash_available)
+    if total_asset <= 0:
+        return None
+    return round(positions_mv / total_asset * 100, 4)
+
+
+def find_entry_trade(trades: List[Dict[str, Any]], lot_id: str) -> Optional[Dict[str, Any]]:
+    for trade in reversed(trades):
+        if trade.get("lot_id") == lot_id and trade.get("action") in {"BUY", "ADD"}:
+            return trade
+    return None
+
+
 def build_trade(
     trade_id: str,
     action: str,
@@ -401,8 +656,25 @@ def build_trade(
     dashboard: Dict[str, Any],
     open_ref: Optional[str] = None,
     open_cost: Optional[float] = None,
+    decision: Optional[Dict[str, Any]] = None,
+    total_position_before_pct: Optional[float] = None,
+    total_position_after_pct: Optional[float] = None,
+    entry_trade: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     amount = round((price or 0) * qty, 2) if price else None
+    decision = decision or {}
+    methodology_version = decision.get("methodology_version") or dashboard.get("methodology_version")
+    decision_action = decision.get("decision_action") or ""
+    rule_code = decision.get("rule_code") or "UNMATCHED_AI_DECISION"
+    signal_basis = decision.get("signal_basis") or ""
+    reason = signal_basis or infer_trade_reason(action, lot["symbol"], dashboard)
+    entry_rule_code = rule_code if action in {"BUY", "ADD"} else (entry_trade or {}).get("rule_code")
+    entry_signal_grade = decision.get("signal_grade") if action in {"BUY", "ADD"} else (entry_trade or {}).get("signal_grade")
+    entry_decision_id = (
+        f"{trade_day}|{lot['symbol']}|{decision_action or action}|{rule_code}"
+        if action in {"BUY", "ADD"}
+        else (entry_trade or {}).get("decision_id")
+    )
     row: Dict[str, Any] = {
         "trade_id": trade_id,
         "date": trade_day,
@@ -416,12 +688,39 @@ def build_trade(
         "commission": commission(amount or 0),
         "channel": "auto",
         "open_ref": open_ref,
-        "reason": infer_trade_reason(action, lot["symbol"], dashboard),
+        "reason": reason,
         "confidence": confidence,
         "source": source,
+        "execution_event_id": decision.get("execution_event_id"),
+        "price_source": decision.get("price_source") or ("market_close" if price else "missing"),
+        "data_confidence": decision.get("data_confidence") or confidence,
+        "methodology_version": methodology_version,
+        "decision_action": decision_action or None,
+        "decision_id": f"{trade_day}|{lot['symbol']}|{decision_action or action}|{rule_code}",
+        "rule_code": rule_code,
+        "signal_grade": decision.get("signal_grade") or "UNKNOWN",
+        "entry_rule_code": entry_rule_code,
+        "entry_signal_grade": entry_signal_grade,
+        "entry_decision_id": entry_decision_id,
+        "target_position_before_pct": decision.get("target_position_before_pct"),
+        "target_position_after_pct": decision.get("target_position_after_pct"),
+        "position_delta_pct": decision.get("position_delta_pct"),
+        "score": decision.get("score"),
+        "vol_ratio": decision.get("vol_ratio"),
+        "ma20_deviation_pct": decision.get("ma20_deviation_pct"),
+        "fund_flow": decision.get("fund_flow") or None,
+        "relative_hs300_strength_pct": decision.get("relative_hs300_strength_pct"),
+        "total_position_before_pct": total_position_before_pct,
+        "total_position_after_pct": total_position_after_pct,
+        "decision_match": bool(decision),
     }
     if price is None:
         row["needs_review"] = True
+    if not decision:
+        row["needs_review"] = True
+    if decision.get("execution_event_id"):
+        row["source"] = "execution_event"
+        row["confidence"] = "high" if decision.get("data_confidence") == "ai_matched" else "medium"
     if action == "SELL" and open_cost is not None and price is not None:
         gross = (price - open_cost) * qty
         row["pnl_amount"] = round(gross - row["commission"], 2)
@@ -438,6 +737,9 @@ def diff_trades(
     quotes: Dict[str, Dict[str, Any]],
     trade_day: str,
     request_matches_current: bool,
+    current_cash_available: float = 0.0,
+    previous_cash_available: float = 0.0,
+    execution_decisions: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
     if not state.get("initialized"):
         return [], ["observer_initialized_without_backfill"]
@@ -450,6 +752,17 @@ def diff_trades(
     high_conf = request_matches_current and request_date == trade_day
     base_confidence = "high" if high_conf else "medium"
     source = "holdings_diff+observer_request" if high_conf else "holdings_diff+fallback"
+    decisions = list(execution_decisions or []) + parse_ai_decisions(dashboard)
+    total_position_before_pct = estimate_total_position_pct(
+        previous_lots,
+        previous_cash_available,
+        quotes,
+    )
+    total_position_after_pct = estimate_total_position_pct(
+        current_lots,
+        current_cash_available,
+        quotes,
+    )
 
     existing_keys = {
         f"{t.get('date')}|{t.get('action')}|{t.get('lot_id')}|{t.get('qty')}|{t.get('price')}"
@@ -467,7 +780,8 @@ def diff_trades(
     for lot_id, cur in cur_by_id.items():
         prev = prev_by_id.get(lot_id)
         if not prev:
-            price = cur["cost"] or quotes.get(cur["symbol"], {}).get("price")
+            decision = match_trade_decision("BUY", cur["symbol"], decisions)
+            price = to_float((decision or {}).get("execution_price"), 0) or cur["cost"] or quotes.get(cur["symbol"], {}).get("price")
             append_trade(
                 build_trade(
                     make_trade_id(trades + new_trades),
@@ -479,13 +793,17 @@ def diff_trades(
                     base_confidence,
                     source,
                     dashboard,
+                    decision=decision,
+                    total_position_before_pct=total_position_before_pct,
+                    total_position_after_pct=total_position_after_pct,
                 )
             )
             continue
 
         qty_delta = cur["qty"] - to_int(prev.get("qty"))
         if qty_delta > 0:
-            price = cur["cost"] or quotes.get(cur["symbol"], {}).get("price")
+            decision = match_trade_decision("ADD", cur["symbol"], decisions)
+            price = to_float((decision or {}).get("execution_price"), 0) or cur["cost"] or quotes.get(cur["symbol"], {}).get("price")
             append_trade(
                 build_trade(
                     make_trade_id(trades + new_trades),
@@ -497,10 +815,20 @@ def diff_trades(
                     base_confidence,
                     source,
                     dashboard,
+                    decision=decision,
+                    total_position_before_pct=total_position_before_pct,
+                    total_position_after_pct=total_position_after_pct,
                 )
             )
         elif qty_delta < 0:
-            price = quotes.get(cur["symbol"], {}).get("price") or to_float(prev.get("cost")) or None
+            decision = match_trade_decision("SELL", cur["symbol"], decisions)
+            price = (
+                to_float((decision or {}).get("execution_price"), 0)
+                or quotes.get(cur["symbol"], {}).get("price")
+                or to_float(prev.get("cost"))
+                or None
+            )
+            entry_trade = find_entry_trade(trades + new_trades, lot_id)
             append_trade(
                 build_trade(
                     make_trade_id(trades + new_trades),
@@ -514,6 +842,10 @@ def diff_trades(
                     dashboard,
                     open_ref=lot_id,
                     open_cost=to_float(prev.get("cost")),
+                    decision=decision,
+                    total_position_before_pct=total_position_before_pct,
+                    total_position_after_pct=total_position_after_pct,
+                    entry_trade=entry_trade,
                 )
             )
         elif (
@@ -528,7 +860,14 @@ def diff_trades(
         symbol = prev.get("symbol")
         lot = dict(prev)
         lot["lot_id"] = lot_id
-        price = quotes.get(symbol, {}).get("price") or to_float(prev.get("cost")) or None
+        decision = match_trade_decision("SELL", symbol, decisions)
+        price = (
+            to_float((decision or {}).get("execution_price"), 0)
+            or quotes.get(symbol, {}).get("price")
+            or to_float(prev.get("cost"))
+            or None
+        )
+        entry_trade = find_entry_trade(trades + new_trades, lot_id)
         append_trade(
             build_trade(
                 make_trade_id(trades + new_trades),
@@ -542,6 +881,10 @@ def diff_trades(
                 dashboard,
                 open_ref=lot_id,
                 open_cost=to_float(prev.get("cost")),
+                decision=decision,
+                total_position_before_pct=total_position_before_pct,
+                total_position_after_pct=total_position_after_pct,
+                entry_trade=entry_trade,
             )
         )
 
@@ -745,6 +1088,116 @@ def build_stats(
     circuit_a = max(0, min(100, round(abs(dd) / 25 * 100, 1)))
     recent = sells[-20:]
     recent_win_rate = (len([t for t in recent if to_float(t.get("pnl_amount")) > 0]) / len(recent) * 100) if recent else None
+    methodology_trades = [
+        trade
+        for trade in trades
+        if trade.get("rule_code") != "MANUAL_BACKFILL"
+        and trade.get("data_confidence") != "manual"
+    ]
+    rule_code_summary: Dict[str, Dict[str, Any]] = {}
+    for trade in methodology_trades:
+        code = str(trade.get("rule_code") or "UNKNOWN")
+        bucket = rule_code_summary.setdefault(
+            code,
+            {
+                "trade_count": 0,
+                "buy_add_count": 0,
+                "reduce_sell_count": 0,
+                "realized_sell_count": 0,
+                "win_count": 0,
+                "pnl_amount": 0.0,
+                "pnl_pct_values": [],
+            },
+        )
+        bucket["trade_count"] += 1
+        if trade.get("action") in {"BUY", "ADD"}:
+            bucket["buy_add_count"] += 1
+        if trade.get("action") == "SELL":
+            bucket["reduce_sell_count"] += 1
+            if trade.get("pnl_amount") is not None:
+                pnl_amount = to_float(trade.get("pnl_amount"))
+                bucket["realized_sell_count"] += 1
+                bucket["pnl_amount"] = round(bucket["pnl_amount"] + pnl_amount, 2)
+                if pnl_amount > 0:
+                    bucket["win_count"] += 1
+                if trade.get("pnl_pct") is not None:
+                    bucket["pnl_pct_values"].append(to_float(trade.get("pnl_pct")))
+    for bucket in rule_code_summary.values():
+        realized = bucket["realized_sell_count"]
+        pct_values = bucket.pop("pnl_pct_values")
+        bucket["win_rate_pct"] = round(bucket["win_count"] / realized * 100, 2) if realized else None
+        bucket["avg_pnl_pct"] = round(sum(pct_values) / len(pct_values), 4) if pct_values else None
+    entry_rule_summary: Dict[str, Dict[str, Any]] = {}
+    for sell in [row for row in sells if row in methodology_trades]:
+        buy = by_lot.get(sell.get("open_ref") or sell.get("lot_id"))
+        entry_code = str(sell.get("entry_rule_code") or (buy or {}).get("rule_code") or "UNKNOWN")
+        bucket = entry_rule_summary.setdefault(
+            entry_code,
+            {
+                "realized_sell_count": 0,
+                "win_count": 0,
+                "pnl_amount": 0.0,
+                "pnl_pct_values": [],
+                "holding_days_values": [],
+            },
+        )
+        pnl_amount = to_float(sell.get("pnl_amount"))
+        bucket["realized_sell_count"] += 1
+        bucket["pnl_amount"] = round(bucket["pnl_amount"] + pnl_amount, 2)
+        if pnl_amount > 0:
+            bucket["win_count"] += 1
+        if sell.get("pnl_pct") is not None:
+            bucket["pnl_pct_values"].append(to_float(sell.get("pnl_pct")))
+        if buy:
+            try:
+                d0 = datetime.strptime(buy.get("date"), "%Y-%m-%d").date()
+                d1 = datetime.strptime(sell.get("date"), "%Y-%m-%d").date()
+                bucket["holding_days_values"].append(max((d1 - d0).days, 0))
+            except Exception:
+                pass
+    for bucket in entry_rule_summary.values():
+        realized = bucket["realized_sell_count"]
+        pnl_pct_values = bucket.pop("pnl_pct_values")
+        holding_days_values = bucket.pop("holding_days_values")
+        bucket["win_rate_pct"] = round(bucket["win_count"] / realized * 100, 2) if realized else None
+        bucket["avg_pnl_pct"] = round(sum(pnl_pct_values) / len(pnl_pct_values), 4) if pnl_pct_values else None
+        bucket["avg_holding_days"] = (
+            round(sum(holding_days_values) / len(holding_days_values), 2)
+            if holding_days_values
+            else None
+        )
+
+    def grouped_performance(field: str) -> Dict[str, Dict[str, Any]]:
+        grouped: Dict[str, Dict[str, Any]] = {}
+        for trade in methodology_trades:
+            key = str(trade.get(field) or "UNKNOWN")
+            bucket = grouped.setdefault(
+                key,
+                {"trade_count": 0, "realized_sell_count": 0, "win_count": 0, "pnl_amount": 0.0},
+            )
+            bucket["trade_count"] += 1
+            if trade.get("action") == "SELL" and trade.get("pnl_amount") is not None:
+                pnl = to_float(trade.get("pnl_amount"))
+                bucket["realized_sell_count"] += 1
+                bucket["pnl_amount"] = round(bucket["pnl_amount"] + pnl, 2)
+                if pnl > 0:
+                    bucket["win_count"] += 1
+        for bucket in grouped.values():
+            count = bucket["realized_sell_count"]
+            bucket["win_rate_pct"] = round(bucket["win_count"] / count * 100, 2) if count else None
+        return grouped
+
+    utilization_values = []
+    for row in snapshots:
+        total = to_float(row.get("total_asset"))
+        positions = to_float(row.get("positions_mv"))
+        if total > 0:
+            utilization_values.append(positions / total * 100)
+    avg_capital_utilization_pct = (
+        round(sum(utilization_values) / len(utilization_values), 4)
+        if utilization_values
+        else None
+    )
 
     return {
         "generated_at": now_text(),
@@ -770,7 +1223,12 @@ def build_stats(
             "win_rate_pct": round(len(wins) / len(sells) * 100, 2) if sells else None,
             "profit_loss_ratio": round(avg_win / avg_loss, 4) if avg_loss else None,
             "avg_holding_days": round(sum(holding_days) / len(holding_days), 2) if holding_days else None,
+            "avg_capital_utilization_pct": avg_capital_utilization_pct,
         },
+        "rule_code_summary": rule_code_summary,
+        "entry_rule_summary": entry_rule_summary,
+        "methodology_version_summary": grouped_performance("methodology_version"),
+        "signal_grade_summary": grouped_performance("signal_grade"),
         "benchmarks": {
             "hs300": hs300,
             "csi500": csi500,
@@ -833,18 +1291,107 @@ def enhanced_close(csi500_close: Optional[float], snapshots: List[Dict[str, Any]
     return round(csi500_close * ((1 + ENHANCED_ALPHA_NET) ** (days / 365)), 6)
 
 
+def build_data_manifest(
+    existing: Dict[str, Any],
+    year: str,
+    events: List[Dict[str, Any]],
+    trades: List[Dict[str, Any]],
+    snapshots: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    manifest = dict(existing or {})
+    files = dict(manifest.get("files") or {})
+    specs = [
+        (execution_file(year), "execution_events", events, "event_id"),
+        (trades_file(year), "trades", trades, "trade_id"),
+        (snapshots_file(year), "portfolio_snapshots", snapshots, "date"),
+    ]
+    for filename, kind, rows, id_key in specs:
+        content = dump_jsonl(rows)
+        files[filename] = {
+            "kind": kind,
+            "year": int(year),
+            "schema_version": DATA_SCHEMA_VERSION,
+            "status": "active",
+            "row_count": len(rows),
+            "last_event_id": rows[-1].get(id_key) if rows else "",
+            "content_bytes": len(content.encode("utf-8")),
+            "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "updated_at": now_text(),
+        }
+    manifest.update(
+        {
+            "schema_version": DATA_SCHEMA_VERSION,
+            "methodology_version": METHODOLOGY_VERSION,
+            "updated_at": now_text(),
+            "files": files,
+            "legacy_files": {
+                **(manifest.get("legacy_files") or {}),
+                FILE_TRADES: {
+                    "status": "read_only_archive",
+                    "migrated_to": trades_file(year),
+                },
+                FILE_SNAPSHOTS: {
+                    "status": "read_only_archive",
+                    "migrated_to": snapshots_file(year),
+                },
+            },
+            "migration_policy": {
+                "gist_file_warning_bytes": 500000,
+                "database_migration_bytes": 800000,
+                "database_target": "Cloudflare D1",
+            },
+        }
+    )
+    return manifest
+
+
 def observe_once(files: Dict[str, str], target_day: str) -> Dict[str, str]:
+    year = target_day[:4]
+    yearly_trades = trades_file(year)
+    yearly_snapshots = snapshots_file(year)
+    yearly_events = execution_file(year)
     holdings = parse_json(files.get(FILE_HOLDINGS, ""), {"cash_available": 0, "holdings": []})
     dashboard = parse_json(files.get(FILE_DASHBOARD, ""), {})
     request = parse_json(files.get(FILE_OBSERVER_REQUEST, ""), {})
     state = parse_json(files.get(FILE_STATE, ""), {})
-    trades = parse_jsonl(files.get(FILE_TRADES, ""))
-    snapshots = parse_jsonl(files.get(FILE_SNAPSHOTS, ""))
+    manifest = parse_json(files.get(FILE_MANIFEST, ""), {})
+    trade_shards = {
+        name: parse_jsonl(raw)
+        for name, raw in files.items()
+        if re.fullmatch(r"trades_\d{4}\.jsonl", name)
+    }
+    snapshot_shards = {
+        name: parse_jsonl(raw)
+        for name, raw in files.items()
+        if re.fullmatch(r"portfolio_snapshots_\d{4}\.jsonl", name)
+    }
+    if trade_shards:
+        historical_trades = [row for rows in trade_shards.values() for row in rows]
+        current_year_trades = list(trade_shards.get(yearly_trades, []))
+    else:
+        legacy_trades = parse_jsonl(files.get(FILE_TRADES, ""))
+        historical_trades = legacy_trades
+        current_year_trades = [
+            row for row in legacy_trades if str(row.get("date") or "").startswith(year)
+        ]
+    if snapshot_shards:
+        historical_snapshots = [row for rows in snapshot_shards.values() for row in rows]
+        current_year_snapshots = list(snapshot_shards.get(yearly_snapshots, []))
+    else:
+        legacy_snapshots = parse_jsonl(files.get(FILE_SNAPSHOTS, ""))
+        historical_snapshots = legacy_snapshots
+        current_year_snapshots = [
+            row for row in legacy_snapshots if str(row.get("date") or "").startswith(year)
+        ]
+    historical_trades.sort(key=lambda row: (row.get("date", ""), row.get("trade_id", "")))
+    historical_snapshots.sort(key=lambda row: row.get("date", ""))
+    events = parse_jsonl(files.get(yearly_events, ""))
+    event_decisions = execution_event_decisions(events, target_day)
 
     canonical = canonical_holdings(holdings)
     current_hash = holdings_hash(holdings)
     previous_lots = state.get("last_holdings") or []
-    known_lot_ids = [lot.get("lot_id") for lot in previous_lots] + [t.get("lot_id") for t in trades]
+    known_lot_ids = [lot.get("lot_id") for lot in previous_lots] + [t.get("lot_id") for t in historical_trades]
     current_lots, lot_notes = assign_current_lots(canonical, previous_lots, known_lot_ids)
     request_matches_current = (
         request.get("holdings_hash") == current_hash
@@ -856,26 +1403,30 @@ def observe_once(files: Dict[str, str], target_day: str) -> Dict[str, str]:
     new_trades, diff_notes = diff_trades(
         current_lots,
         state,
-        trades,
+        historical_trades,
         dashboard,
         request,
         quotes,
         target_day,
         request_matches_current,
+        current_cash_available=canonical["cash_available"],
+        previous_cash_available=to_float(state.get("last_cash_available"), canonical["cash_available"]),
+        execution_decisions=event_decisions,
     )
-    all_trades = trades + new_trades
+    all_trades = historical_trades + new_trades
+    current_year_trades = current_year_trades + new_trades
 
     positions_mv, mv_notes = calc_positions_mv(current_lots, quotes)
     hs300_close = fetch_csindex_close("H00300", target_day)
     csi500_close = fetch_csindex_close("H00905", target_day)
     data_notes = lot_notes + diff_notes + mv_notes
 
-    if not hs300_close and snapshots:
-        hs300_close = to_float(((snapshots[-1].get("benchmarks") or {}).get("hs300_tr") or {}).get("close"), 0) or None
+    if not hs300_close and historical_snapshots:
+        hs300_close = to_float(((historical_snapshots[-1].get("benchmarks") or {}).get("hs300_tr") or {}).get("close"), 0) or None
         if hs300_close:
             data_notes.append("hs300_tr_carry_forward")
-    if not csi500_close and snapshots:
-        csi500_close = to_float(((snapshots[-1].get("benchmarks") or {}).get("csi500_tr") or {}).get("close"), 0) or None
+    if not csi500_close and historical_snapshots:
+        csi500_close = to_float(((historical_snapshots[-1].get("benchmarks") or {}).get("csi500_tr") or {}).get("close"), 0) or None
         if csi500_close:
             data_notes.append("csi500_tr_carry_forward")
 
@@ -899,7 +1450,7 @@ def observe_once(files: Dict[str, str], target_day: str) -> Dict[str, str]:
             },
             "enhanced_ref": {
                 "name": "宽基增强参考",
-                "close": enhanced_close(csi500_close, snapshots, target_day),
+                "close": enhanced_close(csi500_close, historical_snapshots, target_day),
                 "source": "synthetic",
                 "is_assumption": True,
             },
@@ -908,7 +1459,8 @@ def observe_once(files: Dict[str, str], target_day: str) -> Dict[str, str]:
         "source": "observer_action" if request_matches_current else "nightly_fallback",
     }
 
-    snapshots = upsert_snapshot(snapshots, snapshot)
+    historical_snapshots = upsert_snapshot(historical_snapshots, snapshot)
+    current_year_snapshots = upsert_snapshot(current_year_snapshots, snapshot)
     state.setdefault("audit_notes", [])
     state["audit_notes"] = (state.get("audit_notes") or [])[-80:] + data_notes
     state.update(
@@ -923,13 +1475,23 @@ def observe_once(files: Dict[str, str], target_day: str) -> Dict[str, str]:
         }
     )
 
-    stats = build_stats(snapshots, all_trades, state, data_notes)
+    stats = build_stats(historical_snapshots, all_trades, state, data_notes)
+    stats["methodology_version"] = METHODOLOGY_VERSION
+    stats["data_schema_version"] = DATA_SCHEMA_VERSION
+    manifest = build_data_manifest(
+        manifest,
+        year,
+        events,
+        current_year_trades,
+        current_year_snapshots,
+    )
 
     return {
-        FILE_TRADES: dump_jsonl(all_trades),
-        FILE_SNAPSHOTS: dump_jsonl(snapshots),
+        yearly_trades: dump_jsonl(current_year_trades),
+        yearly_snapshots: dump_jsonl(current_year_snapshots),
         FILE_STATE: dump_json(state),
         FILE_STATS: dump_json(stats),
+        FILE_MANIFEST: dump_json(manifest),
     }
 
 
@@ -938,14 +1500,16 @@ def main() -> int:
     parser.add_argument("--date", default=today_text(), help="观察日期 YYYY-MM-DD")
     args = parser.parse_args()
 
-    print(f"📈 X-Plan observe start: {args.date}")
+    validate_document_versions()
+    print(f"📈 X-Plan observe start: {args.date} / {METHODOLOGY_VERSION}")
     try:
         files = read_gist_files()
         updates = observe_once(files, args.date)
         write_gist_files(updates)
         print(
             "✅ observe 完成: "
-            f"{FILE_TRADES}, {FILE_SNAPSHOTS}, {FILE_STATS}, {FILE_STATE}"
+            f"{trades_file(args.date[:4])}, {snapshots_file(args.date[:4])}, "
+            f"{FILE_STATS}, {FILE_STATE}, {FILE_MANIFEST}"
         )
         return 0
     except Exception as exc:

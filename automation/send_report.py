@@ -3,7 +3,7 @@ import sys
 import json
 import requests
 from datetime import datetime
-import akshare as ak
+from versioning import METHODOLOGY_VERSION, validate_document_versions
 
 # Bark App历史列表图标（系统通知横幅图标iOS不可覆盖，是限制不是bug，见fund-monitor的踩坑记录）
 BARK_ICON = "https://cdn.jsdelivr.net/gh/srbaby/ds-scanner@main/favicon.png"
@@ -11,6 +11,8 @@ BARK_ICON = "https://cdn.jsdelivr.net/gh/srbaby/ds-scanner@main/favicon.png"
 
 def is_trade_day():
     try:
+        import akshare as ak
+
         today = datetime.now().strftime('%Y%m%d')
         trade_cal = ak.tool_trade_date_hist_sina()
         trade_dates = trade_cal['trade_date'].astype(str).str.replace('-', '').tolist()
@@ -20,6 +22,21 @@ def is_trade_day():
         return True
 
 
+def build_payload(report_text, today=None):
+    today = today or datetime.now().strftime('%Y-%m-%d')
+    # 全文塞body（不做截断/中转），便于直接在Bark App长按复制给AI兜底分析。
+    # 注意：APNs单条推送payload上限约4KB，report.txt若超长可能被系统截断——
+    # 这是已知风险，按JanY要求选择"全文优先"而非"摘要+链接中转"。
+    return {
+        "title": f"📡 X-Plan {METHODOLOGY_VERSION} 波段扫描 {today}",
+        "body": report_text,
+        "level": "active",
+        "group": "X-Plan扫描",
+        "badge": 1,
+        "icon": BARK_ICON,
+    }
+
+
 def send_bark(report_text):
     keys = [os.environ['BARK_KEY']]
     # 老婆的推送Key（可选，配置后同步推送）
@@ -27,19 +44,7 @@ def send_bark(report_text):
     if wife_key:
         keys.append(wife_key)
 
-    today = datetime.now().strftime('%Y-%m-%d')
-
-    # 全文塞body（不做截断/中转），便于直接在Bark App长按复制给AI兜底分析。
-    # 注意：APNs单条推送payload上限约4KB，report.txt若超长可能被系统截断——
-    # 这是已知风险，按JanY要求选择"全文优先"而非"摘要+链接中转"。
-    payload = {
-        "title": f"📡 X-Plan波段扫描 {today}",
-        "body": report_text,
-        "level": "active",
-        "group": "X-Plan扫描",
-        "badge": 1,
-        "icon": BARK_ICON,
-    }
+    payload = build_payload(report_text)
 
     for key in keys:
         r = requests.post(
@@ -54,6 +59,7 @@ def send_bark(report_text):
 
 
 if __name__ == '__main__':
+    validate_document_versions()
     if not is_trade_day():
         print("📅 今日非交易日，跳过发送")
         sys.exit(0)

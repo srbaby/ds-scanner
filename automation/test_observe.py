@@ -148,6 +148,32 @@ class ObserveTests(unittest.TestCase):
         self.assertIn("rolling_3m_window_insufficient", stats["data_quality"]["notes"])
         self.assertIn("return_base_observation_start", stats["data_quality"]["notes"])
 
+    def test_graduation_a_message_reached_when_excess_hits_line(self):
+        snapshots = [
+            {"date": "2026-05-21", "total_asset": 100000.0, "benchmarks": {"hs300_tr": {"close": 100.0}}},
+            {"date": "2026-07-08", "total_asset": 105300.0, "benchmarks": {"hs300_tr": {"close": 100.0}}},
+        ]
+
+        stats = observe.build_stats(snapshots, [], {"initialized": True}, [])
+        graduation = stats["graduation"]
+
+        self.assertEqual(graduation["condition_a_progress_pct"], 100)
+        self.assertEqual(graduation["status"], "milestone_reached")
+        self.assertEqual(graduation["message"], "已达毕业A观察线，触发复盘评估")
+
+    def test_graduation_a_message_observing_before_line(self):
+        snapshots = [
+            {"date": "2026-05-21", "total_asset": 100000.0, "benchmarks": {"hs300_tr": {"close": 100.0}}},
+            {"date": "2026-07-08", "total_asset": 103000.0, "benchmarks": {"hs300_tr": {"close": 100.0}}},
+        ]
+
+        stats = observe.build_stats(snapshots, [], {"initialized": True}, [])
+        graduation = stats["graduation"]
+
+        self.assertEqual(graduation["condition_a_progress_pct"], 60)
+        self.assertEqual(graduation["status"], "observing")
+        self.assertEqual(graduation["message"], "未达毕业观察线")
+
 
     def test_normalize_symbol_corrects_wrong_market_prefix(self):
         self.assertEqual(observe.normalize_symbol("sz588800"), "sh588800")

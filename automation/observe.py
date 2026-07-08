@@ -738,6 +738,9 @@ def build_stats(
     condition_b = total_return
     graduation_a = max(0, min(100, round((condition_a or 0) / 5 * 100, 1)))
     graduation_b = max(0, min(100, round(condition_b / 15 * 100, 1)))
+    graduation_a_reached = condition_a is not None and condition_a >= 5
+    graduation_status = "milestone_reached" if graduation_a_reached else "observing"
+    graduation_message = "已达毕业A观察线，触发复盘评估" if graduation_a_reached else "未达毕业观察线"
     dd = max_drawdown_pct(asset_values)
     circuit_a = max(0, min(100, round(abs(dd) / 25 * 100, 1)))
     recent = sells[-20:]
@@ -776,8 +779,8 @@ def build_stats(
         "graduation": {
             "condition_a_progress_pct": graduation_a,
             "condition_b_progress_pct": graduation_b,
-            "status": "observing",
-            "message": "未达毕业观察线",
+            "status": graduation_status,
+            "message": graduation_message,
         },
         "circuit_breaker": {
             "condition_a_progress_pct": circuit_a,

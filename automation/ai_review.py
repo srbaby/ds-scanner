@@ -32,6 +32,7 @@ import time
 from typing import Dict, Optional
 
 import requests
+from versioning import METHODOLOGY_VERSION, validate_document_versions
 
 PROXIES = {"http": None, "https": None}
 
@@ -48,6 +49,45 @@ PROMPT_FILE = os.path.join(
 )
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+REQUIRED_OPERATION_COLUMNS = [
+    "操作编号",
+    "类型",
+    "代码",
+    "名称",
+    "当前目标仓位%",
+    "今日目标仓位%",
+    "调整仓位",
+    "规则代码",
+    "信号等级",
+    "中文操作依据",
+    "关键指标",
+]
+
+
+def validate_ai_output(text: str) -> Optional[str]:
+    if "【操作清单】" not in text:
+        return "缺少【操作清单】"
+    header = next(
+        (line for line in text.splitlines() if "|" in line and "操作编号" in line and "规则代码" in line),
+        "",
+    )
+    missing = [column for column in REQUIRED_OPERATION_COLUMNS if column not in header]
+    if missing:
+        return f"操作清单缺少列: {', '.join(missing)}"
+    transaction_rows = []
+    for line in text.splitlines():
+        if "|" not in line or not any(f"| {action} |" in line for action in ["BUY", "ADD", "REDUCE", "SELL"]):
+            continue
+        cols = [part.strip() for part in line.strip().strip("|").split("|")]
+        if len(cols) < len(REQUIRED_OPERATION_COLUMNS):
+            return f"操作行字段不足: {line[:120]}"
+        transaction_rows.append(cols)
+    for cols in transaction_rows:
+        if not cols[0].upper().startswith("OP-"):
+            return f"操作编号无效: {cols[0]}"
+        if not cols[7] or not cols[9]:
+            return f"规则代码或中文操作依据为空: {cols[0]}"
+    return None
 
 
 def load_prompt() -> Optional[str]:
@@ -72,6 +112,7 @@ def call_deepseek(report_text: str) -> Dict:
           "error": str | None,  # ok=False 时为错误说明
         }
     """
+    validate_document_versions()
     if not DEEPSEEK_API_KEY:
         return {
             "ok": False,
@@ -163,6 +204,14 @@ def call_deepseek(report_text: str) -> Dict:
             }
         if finish_reason == "length":
             text += "\n\n⚠️ 系统提示：本次回复因达到max_tokens被截断，内容可能不完整。"
+        format_error = validate_ai_output(text)
+        if format_error:
+            return {
+                "ok": False,
+                "model": DEEPSEEK_MODEL,
+                "text": text,
+                "error": f"{METHODOLOGY_VERSION} 输出契约校验失败: {format_error}",
+            }
         return {"ok": True, "model": DEEPSEEK_MODEL, "text": text, "error": None}
     except Exception as e:
         return {"ok": False, "model": DEEPSEEK_MODEL, "text": "", "error": f"解析响应失败: {e}"}

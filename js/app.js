@@ -48,20 +48,33 @@ for (const [full, name] of Object.entries(ETF_POOL)) {
 const OBSERVE_REPO = 'srbaby/ds-scanner';
 const OBSERVE_WORKFLOW = 'observe.yml';
 const OBSERVE_REF = 'main';
+const DEFAULT_VERSIONS = {
+  methodology_version: 'v3.0',
+  prompt_contract_version: 'v3.0',
+  data_schema_version: 'v2.0',
+};
 
 // ============================================================
 // 状态
 // ============================================================
 let TOKEN = '', GIST_ID = '', holdingsData = {}, dashboardData = null, statsData = null, observerRequestData = null, gistETag = null;
+let versionData = { ...DEFAULT_VERSIONS };
+let executionEvents = [];
+let dataManifest = {};
+let gistRevision = '';
+let currentAiActions = [];
+let operationSaveInFlight = false;
 const editOpenState = new Set();
 
 // ============================================================
 // 初始化
 // ============================================================
-window.onload = () => {
+window.onload = async () => {
   TOKEN   = localStorage.getItem('ds_token') || '';
   GIST_ID = localStorage.getItem('ds_gist')  || '';
   document.getElementById('new-date').value = today();
+  await loadVersionManifest();
+  document.getElementById('app-version').textContent = versionData.methodology_version;
 
   if (TOKEN && GIST_ID) {
     document.getElementById('input-token').value = TOKEN;
@@ -72,6 +85,7 @@ window.onload = () => {
       renderAll();
       renderDashboard(dashboardData);
       renderObserver(statsData);
+      renderExecutionHistory();
       setStatus('已同步', 'ok');
       document.getElementById('display-sync').textContent = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
     }).catch(e => {
@@ -87,6 +101,23 @@ window.onload = () => {
 
 function today() {
   return new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD
+}
+
+function currentYear() {
+  return today().slice(0, 4);
+}
+
+function executionFileName(year = currentYear()) {
+  return `execution_events_${year}.jsonl`;
+}
+
+async function loadVersionManifest() {
+  try {
+    const r = await fetch('VERSION.json', { cache: 'no-store' });
+    if (r.ok) versionData = { ...DEFAULT_VERSIONS, ...(await r.json()) };
+  } catch (e) {
+    versionData = { ...DEFAULT_VERSIONS };
+  }
 }
 
 // ============================================================
@@ -112,6 +143,7 @@ async function doAuth() {
     renderAll();
     renderDashboard(dashboardData);
     renderObserver(statsData);
+    renderExecutionHistory();
     setStatus('已同步', 'ok');
     document.getElementById('display-sync').textContent = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
   } catch(e) {
@@ -134,6 +166,7 @@ async function loadData() {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const gist = await r.json();
   gistETag = r.headers.get('ETag');
+  gistRevision = gist.history?.[0]?.version || '';
 
   const raw = gist.files?.['holdings.json']?.content;
   if (!raw) throw new Error('Gist 中没有 holdings.json');
@@ -150,12 +183,17 @@ async function loadData() {
 
   const rawObserverRequest = gist.files?.['observer_request.json']?.content;
   observerRequestData = rawObserverRequest ? JSON.parse(rawObserverRequest) : null;
+
+  const rawEvents = gist.files?.[executionFileName()]?.content || '';
+  executionEvents = parseJsonl(rawEvents);
+  const rawManifest = gist.files?.['data_manifest.json']?.content;
+  dataManifest = rawManifest ? JSON.parse(rawManifest) : {};
 }
 
 // ============================================================
 // 写回 Gist
 // ============================================================
-async function saveData() {
+async function saveData(extraFiles = {}, successMessage = '✅ 已保存') {
   setStatus('同步中…', '');
   try {
     const content = JSON.stringify(holdingsData, null, 2);
@@ -169,21 +207,249 @@ async function saveData() {
         Authorization: `token ${TOKEN}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ files: { 'holdings.json': { content } } })
+      body: JSON.stringify({ files: {
+        'holdings.json': { content },
+        ...Object.fromEntries(Object.entries(extraFiles).map(([name, value]) => [
+          name, { content: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }
+        ])),
+      } })
     });
     if (!r.ok) {
       const detail = await r.text().catch(() => '');
       throw new Error(`HTTP ${r.status}${detail ? ' ' + detail.slice(0, 200) : ''}`);
     }
     gistETag = r.headers.get('ETag');
+    const updated = await r.json().catch(() => ({}));
+    gistRevision = updated.history?.[0]?.version || gistRevision;
     setStatus('已同步', 'ok');
     document.getElementById('display-sync').textContent =
       new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
     flashRefresh();
-    toast('✅ 已保存', 'success');
+    toast(successMessage, 'success');
+    return true;
   } catch(e) {
     setStatus('同步失败', 'err');
-    toast('❌ 保存失败: ' + e.message, 'error');
+    toast('❌ 未写入: ' + e.message, 'error');
+    return false;
+  }
+}
+
+function parseJsonl(raw) {
+  return String(raw || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+    .map(line => {
+      try { return JSON.parse(line); } catch (e) { return null; }
+    }).filter(Boolean);
+}
+
+function dumpJsonl(rows) {
+  return rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : '');
+}
+
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function makeEventId(prefix = 'evt') {
+  const uuid = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${uuid}`;
+}
+
+function holdingSnapshot(data, symbol) {
+  if (!symbol) return null;
+  const row = (data.holdings || []).find(h => normalizeFullSymbol(h.symbol) === normalizeFullSymbol(symbol) && Number(h.qty) > 0);
+  return row ? deepClone(row) : null;
+}
+
+function portfolioMetrics(data) {
+  const positions = (data.holdings || []).filter(h => Number(h.qty) > 0)
+    .reduce((sum, h) => sum + Number(h.qty || 0) * Number(h.cost || 0), 0);
+  const cash = Number(data.cash_available || 0);
+  const total = positions + cash;
+  return {
+    account_total_value: Number(total.toFixed(2)),
+    total_position_pct: total > 0 ? Number((positions / total * 100).toFixed(4)) : 0,
+    valuation_basis: 'holding_cost',
+  };
+}
+
+function selectedReason(selectId) {
+  const select = document.getElementById(selectId);
+  const option = select?.selectedOptions?.[0];
+  if (!option) {
+    return {
+      ai_action_id: '',
+      rule_code: 'MANUAL_BACKFILL',
+      signal_grade: 'UNKNOWN',
+      reason_zh: '人工补录',
+      target_position_before_pct: null,
+      target_position_after_pct: null,
+      position_delta_pct: null,
+      data_confidence: 'manual',
+    };
+  }
+  try {
+    return JSON.parse(option.dataset.reason || '{}');
+  } catch (e) {
+    return {};
+  }
+}
+
+function buildExecutionEvent(eventType, symbol, beforeData, afterData, reason, extra = {}) {
+  const beforeHolding = holdingSnapshot(beforeData, symbol);
+  const afterHolding = holdingSnapshot(afterData, symbol);
+  const beforeMetrics = portfolioMetrics(beforeData);
+  const afterMetrics = portfolioMetrics(afterData);
+  const qtyBefore = Number(beforeHolding?.qty || 0);
+  const qtyAfter = Number(afterHolding?.qty || 0);
+  const cashBefore = Number(beforeData.cash_available || 0);
+  const cashAfter = Number(afterData.cash_available || 0);
+  const cashDelta = Number((cashAfter - cashBefore).toFixed(2));
+  const qtyDelta = qtyAfter - qtyBefore;
+  const inferredPrice = qtyDelta && cashDelta
+    ? Number((Math.abs(cashDelta) / Math.abs(qtyDelta)).toFixed(6))
+    : null;
+  return {
+    event_id: makeEventId(),
+    schema_version: versionData.data_schema_version,
+    methodology_version: versionData.methodology_version,
+    occurred_at: new Date().toLocaleString('sv-SE'),
+    recorded_at: new Date().toISOString(),
+    trade_date: today(),
+    event_type: eventType,
+    action: eventType,
+    status: 'effective',
+    symbol: symbol ? normalizeFullSymbol(symbol) : '',
+    qty_before: qtyBefore,
+    qty_after: qtyAfter,
+    qty_delta: qtyDelta,
+    cost_before: beforeHolding?.cost ?? null,
+    cost_after: afterHolding?.cost ?? null,
+    cash_before: cashBefore,
+    cash_after: cashAfter,
+    cash_delta: cashDelta,
+    holding_before: beforeHolding,
+    holding_after: afterHolding,
+    account_total_value_before: beforeMetrics.account_total_value,
+    account_total_value_after: afterMetrics.account_total_value,
+    total_position_before_pct: beforeMetrics.total_position_pct,
+    total_position_after_pct: afterMetrics.total_position_pct,
+    valuation_basis: afterMetrics.valuation_basis,
+    execution_price: inferredPrice,
+    price_source: inferredPrice ? 'cash_delta_inferred' : (eventType === 'BUY' || eventType === 'ADD' ? 'holding_cost' : 'not_provided'),
+    ai_action_id: reason.ai_action_id || '',
+    rule_code: reason.rule_code || 'MANUAL_BACKFILL',
+    signal_grade: reason.signal_grade || 'UNKNOWN',
+    reason_zh: reason.reason_zh || '人工补录',
+    target_position_before_pct: reason.target_position_before_pct ?? null,
+    target_position_after_pct: reason.target_position_after_pct ?? null,
+    position_delta_pct: reason.position_delta_pct ?? null,
+    data_confidence: reason.data_confidence || (reason.ai_action_id ? 'ai_matched' : 'manual'),
+    ...extra,
+  };
+}
+
+function updateDataManifest(events) {
+  const year = currentYear();
+  const file = executionFileName(year);
+  const last = events[events.length - 1];
+  const files = { ...(dataManifest.files || {}) };
+  files[file] = {
+    kind: 'execution_events',
+    year: Number(year),
+    schema_version: versionData.data_schema_version,
+    status: 'active',
+    row_count: events.length,
+    last_event_id: last?.event_id || '',
+    updated_at: new Date().toISOString(),
+  };
+  dataManifest = {
+    schema_version: versionData.data_schema_version,
+    methodology_version: versionData.methodology_version,
+    updated_at: new Date().toISOString(),
+    files,
+    legacy_files: {
+      ...(dataManifest.legacy_files || {}),
+      'trades.jsonl': { status: 'read_only_archive', migrated_to: `trades_${year}.jsonl` },
+      'portfolio_snapshots.jsonl': { status: 'read_only_archive', migrated_to: `portfolio_snapshots_${year}.jsonl` },
+    },
+    migration_policy: {
+      gist_file_warning_bytes: 500000,
+      database_migration_bytes: 800000,
+      database_target: 'Cloudflare D1',
+    },
+  };
+}
+
+async function assertNoRemoteChange() {
+  const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+    headers: { Authorization: `token ${TOKEN}` },
+    cache: 'no-store',
+  });
+  if (!r.ok) throw new Error(`并发检查失败 HTTP ${r.status}`);
+  const gist = await r.json();
+  const remoteRevision = gist.history?.[0]?.version || '';
+  if (gistRevision && remoteRevision && gistRevision !== remoteRevision) {
+    throw new Error('Gist 已被其他任务更新，请刷新页面后重试');
+  }
+}
+
+async function verifyEventWritten(eventId) {
+  const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+    headers: { Authorization: `token ${TOKEN}` },
+    cache: 'no-store',
+  });
+  if (!r.ok) throw new Error(`写后校验失败 HTTP ${r.status}`);
+  const gist = await r.json();
+  gistRevision = gist.history?.[0]?.version || gistRevision;
+  const raw = gist.files?.[executionFileName()]?.content || '';
+  if (!parseJsonl(raw).some(row => row.event_id === eventId)) {
+    throw new Error('写后校验未找到事件ID，请刷新确认');
+  }
+}
+
+async function persistExecution(event, beforeData, afterData) {
+  if (operationSaveInFlight) {
+    toast('正在写入，请勿重复提交', 'error');
+    return false;
+  }
+  operationSaveInFlight = true;
+  const previousEvents = deepClone(executionEvents);
+  const previousManifest = deepClone(dataManifest);
+  try {
+    await assertNoRemoteChange();
+    executionEvents = [...executionEvents, event];
+    holdingsData = afterData;
+    updateDataManifest(executionEvents);
+    const eventContent = dumpJsonl(executionEvents);
+    const eventBytes = new TextEncoder().encode(eventContent).length;
+    if (eventBytes >= 800000) {
+      throw new Error('年度事件文件已达到800KB，请先迁移至Cloudflare D1');
+    }
+    dataManifest.files[executionFileName()].content_bytes = eventBytes;
+    dataManifest.files[executionFileName()].content_sha256 = await sha256Hex(eventContent);
+    const ok = await saveData({
+      [executionFileName()]: eventContent,
+      'data_manifest.json': dataManifest,
+    }, '✅ 操作已登记');
+    if (!ok) throw new Error('Gist 保存失败');
+    await verifyEventWritten(event.event_id);
+    if (eventBytes >= 500000) {
+      toast('⚠️ 事件文件已超过500KB，请安排数据库迁移', 'error');
+    }
+    renderAll();
+    renderExecutionHistory();
+    return true;
+  } catch (e) {
+    holdingsData = beforeData;
+    executionEvents = previousEvents;
+    dataManifest = previousManifest;
+    renderAll();
+    renderExecutionHistory();
+    setStatus('未写入', 'err');
+    toast('❌ 未写入: ' + e.message, 'error');
+    return false;
+  } finally {
+    operationSaveInFlight = false;
   }
 }
 
@@ -301,17 +567,24 @@ function getAiSection(text, heading) {
 
 function normalizeActionType(raw) {
   const t = String(raw || '').trim().toUpperCase();
-  if (['SELL', 'BUY', 'HOLD', 'SKIP', 'ADD'].includes(t)) return t;
+  if (['SELL', 'BUY', 'HOLD', 'SKIP', 'ADD', 'REDUCE', 'WATCH'].includes(t)) return t;
   if (/卖出|清仓|止损/.test(raw)) return 'SELL';
+  if (/减仓/.test(raw)) return 'REDUCE';
   if (/买入/.test(raw)) return 'BUY';
   if (/加仓/.test(raw)) return 'ADD';
   if (/持有|持\b/.test(raw)) return 'HOLD';
+  if (/观察|待确认/.test(raw)) return 'WATCH';
   if (/不开新仓|不操作|观望/.test(raw)) return 'SKIP';
   return 'INFO';
 }
 
 function actionLabel(type) {
-  return { SELL: '卖出', BUY: '买入', HOLD: '持有', SKIP: '不开', ADD: '加仓', INFO: '提示' }[type] || '提示';
+  return {
+    SELL: '卖出', BUY: '买入', HOLD: '持有', SKIP: '不开', ADD: '加仓',
+    REDUCE: '减仓', WATCH: '观察', CASH_UPDATE: '改资金',
+    CORRECT_POSITION: '更正持仓', CORRECT_REASON: '更正原因',
+    REVERSE_EVENT: '撤销', INFO: '提示'
+  }[type] || '提示';
 }
 
 function normalizeActionField(value) {
@@ -321,24 +594,50 @@ function normalizeActionField(value) {
 
 function parsePipeAction(line) {
   if (!line.includes('|')) return null;
-  const cols = line.split('|').map(s => s.trim());
+  const cols = line.trim().replace(/^\||\|$/g, '').split('|').map(s => s.trim());
   if (cols.length < 5) return null;
-  if (/^类型$/i.test(cols[0]) || /^[-:]+$/.test(cols[0])) return null;
-  const type = normalizeActionType(cols[0]);
+  if (/操作编号|类型/.test(cols[0]) || /^[-:]+$/.test(cols[0])) return null;
+  const isV3 = /^OP[-_ ]?\d+/i.test(cols[0]) && cols.length >= 11;
+  const offset = isV3 ? 1 : 0;
+  const type = normalizeActionType(cols[offset]);
   if (type === 'INFO') return null;
+  if (isV3) {
+    return {
+      actionId: cols[0],
+      type,
+      code: normalizeActionField(cols[2]),
+      name: normalizeActionField(cols[3]),
+      currentTarget: normalizeActionField(cols[4]),
+      target: normalizeActionField(cols[5]),
+      delta: normalizeActionField(cols[6]),
+      ruleCode: normalizeActionField(cols[7]),
+      signalGrade: normalizeActionField(cols[8]),
+      reasonZh: normalizeActionField(cols[9]),
+      metrics: normalizeActionField(cols.slice(10).join(' / ')),
+      qty: normalizeActionField(cols[6]),
+      note: normalizeActionField(cols[9]),
+    };
+  }
   return {
     type,
     code: normalizeActionField(cols[1]),
     name: normalizeActionField(cols[2]),
     qty: normalizeActionField(cols[3]),
     note: normalizeActionField(cols.slice(4).join(' | ')),
+    actionId: '',
+    ruleCode: '',
+    signalGrade: '',
+    reasonZh: normalizeActionField(cols.slice(4).join(' | ')),
+    currentTarget: '',
+    target: '',
+    delta: normalizeActionField(cols[3]),
+    metrics: '',
   };
 }
 
 function splitActionLines(lines) {
   return lines
     .join('\n')
-    .replace(/\s+(SELL|BUY|HOLD|SKIP|ADD)\s*\|/g, '\n$1 |')
     .split('\n')
     .map(line => line.trim())
     .filter(line => line && !line.startsWith('注：'));
@@ -352,7 +651,7 @@ function parseBulletAction(line) {
   const codeMatch = text.match(/(?:sh|sz)?\d{6}/i);
   const code = codeMatch ? codeMatch[0] : '';
   let rest = text
-    .replace(/^(卖出|买入|持有|加仓|清仓|止损|不开新仓|不操作|观望)\s*/i, '')
+    .replace(/^(卖出|买入|持有|加仓|减仓|观察|清仓|止损|不开新仓|不操作|观望)\s*/i, '')
     .replace(code, '')
     .trim();
   const qtyMatch = rest.match(/(全部|一半|\d+(?:\.\d+)?%仓位|\d+(?:\.\d+)?%|\d+份)/);
@@ -380,6 +679,56 @@ function extractQuickGuide(aiText) {
   return { windowText, actions };
 }
 
+function actionToReason(action) {
+  return {
+    ai_action_id: action.actionId || '',
+    rule_code: action.ruleCode || 'MANUAL_BACKFILL',
+    signal_grade: action.signalGrade || 'UNKNOWN',
+    reason_zh: action.reasonZh || action.note || '人工补录',
+    target_position_before_pct: parseFloat(action.currentTarget) || 0,
+    target_position_after_pct: parseFloat(action.target) || 0,
+    position_delta_pct: parseFloat(action.delta) || 0,
+    data_confidence: action.actionId ? 'ai_matched' : 'manual',
+  };
+}
+
+function reasonOptionsFor(symbol, types = []) {
+  const normalized = symbol ? normalizeFullSymbol(symbol) : '';
+  const allowed = Array.isArray(types) ? types : [types];
+  const rows = currentAiActions.filter(action => {
+    const sameSymbol = normalized && normalizeFullSymbol(action.code) === normalized;
+    return sameSymbol && (!allowed.length || allowed.includes(action.type));
+  });
+  const options = rows.map(action => ({
+    label: `${action.actionId} · ${action.reasonZh || action.note}（${action.ruleCode}）`,
+    reason: actionToReason(action),
+  }));
+  options.push({
+    label: '人工补录（不计入方法论统计）',
+    reason: {
+      ai_action_id: '',
+      rule_code: 'MANUAL_BACKFILL',
+      signal_grade: 'UNKNOWN',
+      reason_zh: '人工补录',
+      target_position_before_pct: null,
+      target_position_after_pct: null,
+      position_delta_pct: null,
+      data_confidence: 'manual',
+    },
+  });
+  return options;
+}
+
+function fillReasonSelect(selectId, symbol, types, preferredRule = '') {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  const options = reasonOptionsFor(symbol, types);
+  select.innerHTML = options.map((item, idx) => {
+    const selected = preferredRule && item.reason.rule_code === preferredRule ? ' selected' : (!preferredRule && idx === 0 ? ' selected' : '');
+    return `<option value="${idx}" data-reason="${escapeHtml(JSON.stringify(item.reason))}"${selected}>${escapeHtml(item.label)}</option>`;
+  }).join('');
+}
+
 function renderQuickGuide(data, aiText) {
   const guide = document.getElementById('quick-guide');
   const body = document.getElementById('quick-guide-body');
@@ -396,6 +745,7 @@ function renderQuickGuide(data, aiText) {
   }
 
   meta.textContent = [data.generated_at, data.methodology_version].filter(Boolean).join(' · ') || '—';
+  currentAiActions = parsed.actions || [];
   const parts = [];
   if (parsed.windowText) {
     parts.push(`<div class="quick-window">${escapeHtml(parsed.windowText)}</div>`);
@@ -412,6 +762,9 @@ function renderQuickGuide(data, aiText) {
       parts.push(`<div class="quick-qty">${escapeHtml(action.qty || '')}</div>`);
       if (action.note && action.note !== title) {
         parts.push(`<div class="quick-note">${escapeHtml(action.note)}</div>`);
+      }
+      if (action.ruleCode) {
+        parts.push(`<div class="quick-note">${escapeHtml(action.ruleCode)} · ${escapeHtml(action.reasonZh || '')}</div>`);
       }
       parts.push('</div>');
     });
@@ -435,6 +788,7 @@ function renderDashboard(data) {
   if (!aiSection || !aiMeta || !aiBody || !reportSection || !reportBody) return;
 
   if (!data) {
+    currentAiActions = [];
     if (quickGuide) quickGuide.hidden = true;
     aiSection.classList.remove('ai-err');
     aiSection.classList.remove('is-stale');
@@ -479,10 +833,11 @@ function renderDashboard(data) {
     aiSection.open = !hasQuickGuide;
     reportSection.open = false; // 干货已展示，原始数据默认折叠
   } else {
+    currentAiActions = [];
     if (quickGuide) quickGuide.hidden = true;
     aiSection.classList.add('ai-err');
     aiSection.open = true;
-    aiBody.innerHTML = `<div class="error-box">⚠️ AI分析失败：${escapeHtml(ai.error || '未知错误')}\n\n请展开下方「原始扫描数据」，手动复制给Gemini/DeepSeek网页版分析。</div>`;
+    aiBody.innerHTML = `<div class="error-box">⚠️ AI分析失败：${escapeHtml(ai.error || '未知错误')}\n\n请展开下方「原始扫描数据」，手动复制给备用AI分析。</div>`;
     reportSection.open = true; // AI失败兜底：自动展开原始数据
   }
 
@@ -840,10 +1195,14 @@ function normalizeFullSymbol(raw) {
 }
 
 async function sha256Short(text) {
+  return (await sha256Hex(text)).slice(0, 16);
+}
+
+async function sha256Hex(text) {
   if (!window.crypto?.subtle) return '';
   const data = new TextEncoder().encode(text);
   const hash = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 function pctText(value) {
@@ -876,10 +1235,19 @@ function toggleCashEdit() {
 async function saveCash() {
   const val = parseFloat(document.getElementById('input-cash').value);
   if (isNaN(val) || val < 0) { toast('金额无效', 'error'); return; }
-  holdingsData.cash_available = val;
+  const before = deepClone(holdingsData);
+  const after = deepClone(holdingsData);
+  after.cash_available = val;
+  const reason = {
+    ai_action_id: '',
+    rule_code: 'CASH_UPDATE',
+    signal_grade: 'N/A',
+    reason_zh: '可用资金调整（非交易）',
+    data_confidence: 'manual',
+  };
+  const event = buildExecutionEvent('CASH_UPDATE', '', before, after, reason);
   document.getElementById('cash-input-row').style.display = 'none';
-  renderAll();
-  await saveData();
+  await persistExecution(event, before, after);
 }
 
 // ============================================================
@@ -891,7 +1259,9 @@ function openDrawer() {
   document.getElementById('new-qty').value = '';
   document.getElementById('new-cost').value = '';
   document.getElementById('new-date').value = today();
-  document.getElementById('new-comment').value = '';
+  document.getElementById('new-cash').value = holdingsData.cash_available || '';
+  fillReasonSelect('new-reason', '', ['BUY', 'ADD']);
+  updateNewPreview();
   document.getElementById('suggest-list').classList.remove('open');
   document.getElementById('drawer-overlay').classList.add('open');
   document.getElementById('drawer').classList.add('open');
@@ -907,6 +1277,12 @@ function onSymbolInput(val) {
   // 否则 addHolding() 会优先用旧的 fullCode 而非当前实际输入的代码（买入代码不匹配的bug）
   delete document.getElementById('new-symbol').dataset.fullCode;
   const digits = val.replace(/\D/g, '');
+  if (digits.length === 6) {
+    const symbol = normalizeFullSymbol(val);
+    const existing = (holdingsData.holdings || []).some(h => normalizeFullSymbol(h.symbol) === symbol && Number(h.qty) > 0);
+    fillReasonSelect('new-reason', symbol, existing ? ['ADD'] : ['BUY']);
+  }
+  updateNewPreview();
   const list = document.getElementById('suggest-list');
   if (digits.length < 3) { list.classList.remove('open'); return; }
 
@@ -928,6 +1304,9 @@ function selectSuggest(code, name) {
   document.getElementById('new-symbol').value = code.slice(2);
   document.getElementById('new-symbol').dataset.fullCode = code;
   document.getElementById('suggest-list').classList.remove('open');
+  const existing = (holdingsData.holdings || []).some(h => normalizeFullSymbol(h.symbol) === code && Number(h.qty) > 0);
+  fillReasonSelect('new-reason', code, existing ? ['ADD'] : ['BUY']);
+  updateNewPreview();
   document.getElementById('new-qty').focus();
 }
 
@@ -936,11 +1315,12 @@ async function addHolding() {
   const qty     = parseInt(document.getElementById('new-qty').value);
   const cost    = parseFloat(document.getElementById('new-cost').value);
   const date    = document.getElementById('new-date').value;
-  const comment = document.getElementById('new-comment').value.trim();
+  const cashAfter = parseFloat(document.getElementById('new-cash').value);
 
   if (!rawSym) { toast('请输入代码', 'error'); return; }
   if (isNaN(qty) || qty <= 0) { toast('数量无效', 'error'); return; }
   if (isNaN(cost) || cost <= 0) { toast('成本价无效', 'error'); return; }
+  if (isNaN(cashAfter) || cashAfter < 0) { toast('操作后可用资金无效', 'error'); return; }
   if (!date) { toast('请选择日期', 'error'); return; }
 
 // 解析完整代码（支持智能判别沪深前缀与自动纠错）
@@ -972,18 +1352,39 @@ async function addHolding() {
     if (!confirm(`已有 ${symbol} 持仓，确认加仓？`)) return;
   }
 
+  const before = deepClone(holdingsData);
+  const after = deepClone(holdingsData);
+  const existingAfter = after.holdings.find(h => normalizeFullSymbol(h.symbol) === symbol && Number(h.qty) > 0);
   const entry = {
     symbol, qty, cost, buy_date: date,
     wave_type: '', is_reduced: false,
     _lot_id: makeClientLotId(symbol, date)
   };
-  if (comment) entry._comment = comment;
-
-  holdingsData.holdings.push(entry);
+  if (existingAfter) {
+    existingAfter.qty = Number(existingAfter.qty) + qty;
+    existingAfter.cost = cost;
+  } else {
+    after.holdings.push(entry);
+  }
+  after.cash_available = cashAfter;
+  const eventType = existingAfter ? 'ADD' : 'BUY';
+  const reason = selectedReason('new-reason');
+  const event = buildExecutionEvent(eventType, symbol, before, after, reason);
   editOpenState.clear();
-  closeDrawer();
-  renderAll();
-  await saveData();
+  if (await persistExecution(event, before, after)) closeDrawer();
+}
+
+function updateNewPreview() {
+  const qty = parseInt(document.getElementById('new-qty')?.value);
+  const cost = parseFloat(document.getElementById('new-cost')?.value);
+  const cash = parseFloat(document.getElementById('new-cash')?.value);
+  const el = document.getElementById('new-preview');
+  if (!el) return;
+  if (!Number.isFinite(qty) || !Number.isFinite(cost) || !Number.isFinite(cash)) {
+    el.textContent = '填写后显示持仓与资金变化';
+    return;
+  }
+  el.textContent = `本次登记 ${qty.toLocaleString()} 份，成本 ${cost.toFixed(3)}；可用资金 ${Number(holdingsData.cash_available || 0).toFixed(2)} → ${cash.toFixed(2)}`;
 }
 
 function makeClientLotId(symbol, buyDate) {
@@ -1003,26 +1404,13 @@ function makeClientLotId(symbol, buyDate) {
 // ============================================================
 function openReduce(idx) {
   const h = holdingsData.holdings[idx];
-  const newQty = prompt(`减仓 ${h.symbol}，当前 ${h.qty} 份\n请输入剩余份额：`);
-  if (newQty === null) return;
-  const qty = parseInt(newQty);
-  if (isNaN(qty) || qty < 0 || qty >= h.qty) {
-    toast('份额无效（须小于当前持仓且≥0）', 'error');
-    return;
-  }
-  h.qty = qty;
-  h.is_reduced = true;
-  editOpenState.clear();
-  if (qty === 0) {
-    removeCardWithAnimation(idx, () => {
-      holdingsData.holdings.splice(idx, 1);
-      renderAll();
-      saveData();
-    });
-  } else {
-    renderAll();
-    saveData();
-  }
+  openOperationDialog('REDUCE', idx, {
+    title: `减仓 ${h.symbol}`,
+    qty: h.qty,
+    cost: h.cost,
+    cash: holdingsData.cash_available,
+    reasonTypes: ['REDUCE'],
+  });
 }
 
 // ============================================================
@@ -1030,12 +1418,12 @@ function openReduce(idx) {
 // ============================================================
 function closePosition(idx) {
   const h = holdingsData.holdings[idx];
-  if (!confirm(`确认清仓 ${h.symbol}？此操作将删除该记录。`)) return;
-  editOpenState.clear();
-  removeCardWithAnimation(idx, () => {
-    holdingsData.holdings.splice(idx, 1);
-    renderAll();
-    saveData();
+  openOperationDialog('SELL', idx, {
+    title: `清仓 ${h.symbol}`,
+    qty: 0,
+    cost: h.cost,
+    cash: holdingsData.cash_available,
+    reasonTypes: ['SELL'],
   });
 }
 
@@ -1057,12 +1445,197 @@ async function saveCard(idx) {
   const cost = parseFloat(document.getElementById(`ec-${idx}`).value);
   const date = document.getElementById(`ed-${idx}`).value;
   if (isNaN(qty) || isNaN(cost) || !date) { toast('数据无效', 'error'); return; }
-  holdingsData.holdings[idx].qty = qty;
-  holdingsData.holdings[idx].cost = cost;
-  holdingsData.holdings[idx].buy_date = date;
+  const before = deepClone(holdingsData);
+  const after = deepClone(holdingsData);
+  after.holdings[idx].qty = qty;
+  after.holdings[idx].cost = cost;
+  after.holdings[idx].buy_date = date;
+  const reason = {
+    ai_action_id: '',
+    rule_code: 'CORRECT_POSITION',
+    signal_grade: 'N/A',
+    reason_zh: '更正持仓登记（不计入方法论统计）',
+    data_confidence: 'correction',
+  };
+  const event = buildExecutionEvent('CORRECT_POSITION', after.holdings[idx].symbol, before, after, reason);
   editOpenState.delete(idx);
-  renderAll();
-  await saveData();
+  await persistExecution(event, before, after);
+}
+
+function openOperationDialog(mode, idx, options = {}) {
+  const dialog = document.getElementById('operation-dialog');
+  const h = Number.isInteger(idx) && idx >= 0 ? holdingsData.holdings[idx] : null;
+  document.getElementById('operation-mode').value = mode;
+  document.getElementById('operation-index').value = Number.isInteger(idx) ? idx : '';
+  document.getElementById('operation-event-id').value = options.eventId || '';
+  document.getElementById('operation-dialog-title').textContent = options.title || '登记操作';
+  document.getElementById('operation-qty').value = options.qty ?? h?.qty ?? '';
+  document.getElementById('operation-cost').value = options.cost ?? h?.cost ?? '';
+  document.getElementById('operation-cash').value = options.cash ?? holdingsData.cash_available ?? '';
+  document.getElementById('operation-qty-wrap').style.display = mode === 'CORRECT_REASON' ? 'none' : 'block';
+  document.getElementById('operation-cost-wrap').style.display = ['REDUCE', 'SELL', 'CORRECT_REASON'].includes(mode) ? 'none' : 'block';
+  document.getElementById('operation-cash-wrap').style.display = mode === 'CORRECT_REASON' ? 'none' : 'block';
+  const symbol = h?.symbol || options.symbol || '';
+  fillReasonSelect('operation-reason', symbol, options.reasonTypes || [mode], options.preferredRule || '');
+  document.getElementById('operation-preview').textContent =
+    mode === 'CORRECT_REASON'
+      ? '只更正操作依据，不改变持仓和资金。原记录会保留并标记为已更正。'
+      : `当前 ${h?.qty ?? 0} 份；请填写操作后的剩余份额和可用资金。`;
+  dialog.showModal();
+}
+
+function closeOperationDialog() {
+  document.getElementById('operation-dialog').close();
+}
+
+async function confirmOperationDialog() {
+  const mode = document.getElementById('operation-mode').value;
+  const idx = parseInt(document.getElementById('operation-index').value);
+  const targetEventId = document.getElementById('operation-event-id').value;
+  const reason = selectedReason('operation-reason');
+  if (mode === 'CORRECT_REASON') {
+    const original = executionEvents.find(row => row.event_id === targetEventId);
+    if (!original) { toast('找不到原操作记录', 'error'); return; }
+    const before = deepClone(holdingsData);
+    const event = buildExecutionEvent('CORRECT_REASON', original.symbol, before, before, reason, {
+      target_event_id: targetEventId,
+      previous_rule_code: original.rule_code,
+      previous_reason_zh: original.reason_zh,
+    });
+    if (await persistExecution(event, before, before)) closeOperationDialog();
+    return;
+  }
+
+  const h = holdingsData.holdings[idx];
+  if (!h) { toast('持仓不存在，请刷新', 'error'); return; }
+  const qtyAfter = parseInt(document.getElementById('operation-qty').value);
+  const cashAfter = parseFloat(document.getElementById('operation-cash').value);
+  if (!Number.isFinite(qtyAfter) || qtyAfter < 0 || qtyAfter >= Number(h.qty)) {
+    toast('剩余份额必须小于当前持仓且不小于0', 'error'); return;
+  }
+  if (!Number.isFinite(cashAfter) || cashAfter < 0) {
+    toast('操作后可用资金无效', 'error'); return;
+  }
+  if (mode === 'SELL' && qtyAfter !== 0) {
+    toast('清仓后的剩余份额必须为0', 'error'); return;
+  }
+  const before = deepClone(holdingsData);
+  const after = deepClone(holdingsData);
+  const symbol = h.symbol;
+  if (qtyAfter === 0) {
+    after.holdings.splice(idx, 1);
+  } else {
+    after.holdings[idx].qty = qtyAfter;
+    after.holdings[idx].is_reduced = true;
+  }
+  after.cash_available = cashAfter;
+  const event = buildExecutionEvent(mode, symbol, before, after, reason);
+  editOpenState.clear();
+  if (await persistExecution(event, before, after)) closeOperationDialog();
+}
+
+function eventDisplayState(event) {
+  const reversed = executionEvents.some(row => row.event_type === 'REVERSE_EVENT' && row.target_event_id === event.event_id);
+  if (reversed) return { status: '已撤销', cls: 'reversed' };
+  const correction = [...executionEvents].reverse()
+    .find(row => row.event_type === 'CORRECT_REASON' && row.target_event_id === event.event_id);
+  if (correction) return {
+    status: '已更正',
+    cls: 'corrected',
+    reason_zh: correction.reason_zh,
+    rule_code: correction.rule_code,
+  };
+  return { status: '有效', cls: 'effective' };
+}
+
+function canReverseEvent(event) {
+  if (!['BUY', 'ADD', 'REDUCE', 'SELL', 'CASH_UPDATE', 'CORRECT_POSITION'].includes(event.event_type)) return false;
+  if (eventDisplayState(event).status === '已撤销') return false;
+  const index = executionEvents.findIndex(row => row.event_id === event.event_id);
+  return !executionEvents.slice(index + 1).some(row =>
+    !['CORRECT_REASON', 'REVERSE_EVENT'].includes(row.event_type) &&
+    event.symbol && normalizeFullSymbol(row.symbol) === normalizeFullSymbol(event.symbol)
+  );
+}
+
+function renderExecutionHistory() {
+  const list = document.getElementById('execution-list');
+  const meta = document.getElementById('execution-meta');
+  if (!list || !meta) return;
+  const baseEvents = executionEvents.filter(row => !['CORRECT_REASON', 'REVERSE_EVENT'].includes(row.event_type));
+  const todayCount = baseEvents.filter(row => String(row.trade_date || row.occurred_at || '').startsWith(today())).length;
+  meta.textContent = `今日 ${todayCount} 笔 · 本年 ${baseEvents.length} 笔 · ${executionFileName()}`;
+  if (!baseEvents.length) {
+    list.innerHTML = '<div class="empty-state"><div>暂无操作记录</div><div class="empty-hint">买卖、资金修改和更正都会显示在这里</div></div>';
+    return;
+  }
+  list.innerHTML = [...baseEvents].reverse().slice(0, 30).map(event => {
+    const display = eventDisplayState(event);
+    const reason = display.reason_zh || event.reason_zh || '—';
+    const rule = display.rule_code || event.rule_code || '—';
+    const qtyText = event.symbol
+      ? `${Number(event.qty_before || 0).toLocaleString()} → ${Number(event.qty_after || 0).toLocaleString()} 份`
+      : `资金 ${Number(event.cash_before || 0).toFixed(2)} → ${Number(event.cash_after || 0).toFixed(2)}`;
+    const actions = display.status === '已撤销' ? '' : `
+      <button onclick="correctEventReason('${event.event_id}')">更正原因</button>
+      ${canReverseEvent(event) ? `<button class="danger" onclick="reverseExecution('${event.event_id}')">撤销登记</button>` : ''}
+    `;
+    return `<div class="execution-row execution-${display.cls}">
+      <div class="execution-row-main">
+        <span class="execution-action">${escapeHtml(actionLabel(event.event_type))}</span>
+        <strong>${escapeHtml(event.symbol || '可用资金')}</strong>
+        <span>${escapeHtml(qtyText)}</span>
+        <span class="execution-status">${display.status}</span>
+      </div>
+      <div class="execution-reason">${escapeHtml(reason)} · ${escapeHtml(rule)}</div>
+      <div class="execution-foot">
+        <span>${escapeHtml(event.occurred_at || '')}</span>
+        <div class="execution-buttons">${actions}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function correctEventReason(eventId) {
+  const event = executionEvents.find(row => row.event_id === eventId);
+  if (!event) return;
+  openOperationDialog('CORRECT_REASON', -1, {
+    title: `更正 ${event.symbol || '资金'} 的操作依据`,
+    eventId,
+    symbol: event.symbol,
+    reasonTypes: [event.action],
+    preferredRule: event.rule_code,
+  });
+}
+
+async function reverseExecution(eventId) {
+  const original = executionEvents.find(row => row.event_id === eventId);
+  if (!original || !canReverseEvent(original)) {
+    toast('该记录已有后续同标的操作，请使用更正登记', 'error');
+    return;
+  }
+  if (!confirm('仅撤销 X-Plan 登记，不会撤销券商真实成交。确认继续？')) return;
+  const before = deepClone(holdingsData);
+  const after = deepClone(holdingsData);
+  if (original.symbol) {
+    after.holdings = (after.holdings || []).filter(h => normalizeFullSymbol(h.symbol) !== normalizeFullSymbol(original.symbol));
+    if (original.holding_before && Number(original.holding_before.qty) > 0) {
+      after.holdings.push(deepClone(original.holding_before));
+    }
+  }
+  after.cash_available = Number((Number(after.cash_available || 0) - Number(original.cash_delta || 0)).toFixed(2));
+  const reason = {
+    ai_action_id: '',
+    rule_code: 'REVERSE_EVENT',
+    signal_grade: 'N/A',
+    reason_zh: `撤销登记：${original.reason_zh || original.rule_code || original.event_type}`,
+    data_confidence: 'correction',
+  };
+  const event = buildExecutionEvent('REVERSE_EVENT', original.symbol, before, after, reason, {
+    target_event_id: original.event_id,
+    reversed_event_type: original.event_type,
+  });
+  await persistExecution(event, before, after);
 }
 
 // ============================================================

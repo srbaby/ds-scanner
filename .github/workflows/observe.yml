@@ -25,6 +25,8 @@ jobs:
           cache: 'pip'
           cache-dependency-path: |
             automation/observe.py
+            automation/versioning.py
+            VERSION.json
 
       - name: 安装Python依赖
         run: pip install requests

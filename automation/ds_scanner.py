@@ -11,19 +11,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-X-Plan 波段验证系统 - 尾盘扫描器 v3.0
+X-Plan 波段验证系统 - 尾盘扫描器 v3.1
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-核心升级 v3.0（动态止盈与状态记忆 完全体）:
-  - ⭐ [新增] 动态止盈拦截：计算并传入 max_drawdown，严格执行最高点回撤 3% 强制清仓纪律。
-  - ⭐ [新增] 状态记忆机制：识别 holdings.json 中的 is_reduced 标签，解决减半仓后重复提示减仓的死循环Bug。
-  - ⭐ [优化] 半仓格局期真正实现“零压力底仓”，不再受 +8% 减仓线干扰，直达 +12% 终极止盈。
+核心升级 v3.1（v3.0方法论落地）:
+  - ⭐ [新增] 扫描报告补充账户总市值、总权益仓位、单品当前仓位、MA20偏离、相对沪深300强度。
+  - ⭐ [调整] 持仓管理卡只提供风险/趋势提示，不再强制“盈利到线即减仓”。
+  - ⭐ [调整] 报告任务改为每日一次目标仓位重估，兼容 DeepSeek / Gemini。
 
 历史核心升级 v2.6-v2.7（价值波段同步）:
   - ⭐ 彻底废除闪电战止损（T+1/T+2/T+3节点）。
   - ⭐ 引入三道防线：逻辑止损（政策分<15）、价格止损（-8%）、时间止损（T+21）。
 
 运行时间: 每日14:30（量比以14:55尾盘为准）
-输出格式: 原始数据（不含评分），DeepSeek基于四维框架评分
+输出格式: 原始数据（不含评分），AI基于v3.0框架输出目标仓位
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -35,13 +35,14 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
+from versioning import METHODOLOGY_VERSION, validate_document_versions
 
 # ============================================================
 # 系统全局常量
 # ============================================================
-SYSTEM_VERSION = "3.0"
+SYSTEM_VERSION = "3.1"
 SYSTEM_NAME = "X-Plan 波段验证系统"
-METHODOLOGY_DESC = "价值波段 Value-Swing"
+METHODOLOGY_DESC = f"{METHODOLOGY_VERSION} 右轮目标仓位"
 
 os.environ["TZ"] = "Asia/Shanghai"
 if hasattr(time, "tzset"):
@@ -313,7 +314,7 @@ def generate_holdings_template():
                 "buy_date": "2026-02-02",
                 "wave_type": "",
                 "is_reduced": False,
-                "_comment": "wave_type留空=自动推断。is_reduced用于标记是否已完成半仓止盈",
+                "_comment": "wave_type留空=自动推断。is_reduced为历史兼容字段，v3.0不按固定浮盈线强制减仓",
             }
         ],
     }
@@ -327,7 +328,7 @@ def generate_holdings_template():
 
 
 def should_refresh_policy():
-    """判断是否需要刷新policy分数"""
+    """判断是否需要刷新基础逻辑分数（字段名沿用 policy 以兼容旧数据）。"""
     if not os.path.exists("data/etf_pool.json"):
         return True, "首次运行，全量扫描"
 
@@ -500,7 +501,7 @@ def calc_relative_strength_score(etf_change: float, index_change: float) -> int:
 
 
 def refresh_etf_pool(base_scores: Dict, index_change: float):
-    print("⏳ 正在刷新ETF池policy分数...")
+    print("⏳ 正在刷新ETF池基础逻辑分数...")
     etf_pool = {}
     codes = list(ETF_WATCHLIST_BASE.keys())
     realtime = fetch_sina_realtime(codes)
@@ -563,7 +564,7 @@ def refresh_etf_pool(base_scores: Dict, index_change: float):
     _save_etf_pool(output)
 
     print(" 完成!")
-    print(f"✅ 已更新{len(etf_pool)}个ETF的policy分数")
+    print(f"✅ 已更新{len(etf_pool)}个ETF的基础逻辑分数")
     return etf_pool
 
 
@@ -755,7 +756,11 @@ def generate_wave_action(
     policy_score: int = None,
     max_drawdown: float = 0.0,
 ) -> str:
-    """生成持仓操作建议（v3.0价值波段规则，加入动态止盈）"""
+    """生成持仓风险提示（v3.0目标仓位规则）。
+
+    扫描器只给风险/趋势线索，不再用固定浮盈线强制减仓。
+    最终 BUY/ADD/REDUCE/SELL 由 AI 按 0/10/15/20 目标仓位重估输出。
+    """
     wave_type = h["wave_type"]
     config = WAVE_CONFIG.get(wave_type, WAVE_CONFIG["快速波段"])
     max_days = config["max_days"]
@@ -763,52 +768,47 @@ def generate_wave_action(
 
     # 防线1：价格止损
     if profit_pct <= HARD_STOP_LOSS:
-        return f"🔴 立即止损（触发-8%硬止损，不等尾盘，市价清仓）"
+        return "🔴 RISK_STOP | 跌破-8%价格风控线，今日目标仓位=0%，清仓候选"
 
     # 防线2：逻辑止损
     if policy_score is not None and policy_score < POLICY_LOGIC_STOP_THRESHOLD:
         return (
-            f"🔴 逻辑止损（板块政策分{policy_score}<15，政策逻辑证伪，尾盘14:55清仓）"
+            f"🔴 RISK_STOP | 基础逻辑分{policy_score}<15，逻辑证伪，今日目标仓位=0%"
         )
 
     # 防线3：时间止损
     if holding_days >= max_days:
-        return f"⏰ 尾盘平仓（第{holding_days}天，T+21时间止损触发，强制换股）"
+        return (
+            f"⏰ TIME_FAIL待确认 | 第{holding_days}天达到T+{max_days}检查点；"
+            "若今日未保持A/S强势则目标仓位=0%，若仍强可TIME_EXTEND"
+        )
 
     # 正常持有期参数
     hard_stop_price = cost * (1 + HARD_STOP_LOSS / 100)
     space_to_stop = ((price - hard_stop_price) / price * 100) if price > 0 else 0
     days_left = max_days - holding_days
 
-    is_reduced = h.get("is_reduced", False)
-
-    # v3.0 核心：止盈提示与拦截
-    if is_reduced:
-        if max_drawdown <= -3.0:
-            return f"🔴 动态止盈触发（已从最高点回撤 {max_drawdown:.2f}%，跌破-3%防线，尾盘全部清仓！）"
-        elif profit_pct >= 12.0:
-            return f"🎯 终极止盈触发（浮盈 {profit_pct:.2f}% ≥ 12%，强制全部清仓，落袋为安！）"
-        else:
-            return (
-                f"✅ 格局剩余仓位（浮盈 {profit_pct:.2f}%，距高点回撤 {max_drawdown:.2f}%）"
-                f" | 纪律：回撤达-3% 或 浮盈达+12% 全清"
-            )
-    elif profit_pct >= 8.0:
+    if profit_pct > 0 and max_drawdown <= -3.0:
         return (
-            f"🎯 首次减仓（浮盈{profit_pct:.2f}%≥8%，强制触发：卖出50%锁定利润）"
-            f' | 减仓后请在holdings.json中添加 "is_reduced": true'
+            f"🟡 PROFIT_WEAKEN候选 | 浮盈{profit_pct:.2f}%，但较高点回撤{max_drawdown:.2f}%；"
+            "若量能/资金/评分同步转弱，目标仓位降一档"
         )
-    elif profit_pct >= 5.0:
+    if profit_pct >= 8.0:
         return (
-            f"✅ 观察止盈（浮盈{profit_pct:.2f}%，接近首次减仓线+8%）"
-            f" | 距-8%止损线还有{space_to_stop:.1f}% | 持仓第{holding_days}天/距T+21还有{days_left}天"
+            f"✅ HOLD_TARGET候选 | 浮盈{profit_pct:.2f}%，不因盈利自动减仓；"
+            f"若动能转弱用PROFIT_WEAKEN，若过热用OVERHEAT_HOLD | 距-8%线{space_to_stop:.1f}% | 距T+{max_days}还有{days_left}天"
+        )
+    if profit_pct >= 5.0:
+        return (
+            f"✅ HOLD_TARGET候选 | 浮盈{profit_pct:.2f}%，趋势未坏不急减；"
+            f"等待AI按今日B/A/S等级重估目标仓位 | 距-8%线{space_to_stop:.1f}% | 距T+{max_days}还有{days_left}天"
         )
 
     # 洗盘期特殊提示
     if holding_days < 5 and profit_pct < 0:
         return (
-            f"🟢 洗盘持有（浮亏{profit_pct:.2f}%，ETF价值托底，给主力{5 - holding_days}天洗盘空间）"
-            f" | 距-8%硬止损线还有{space_to_stop:.1f}% | 政策分{'正常' if policy_score is None or policy_score >= 15 else f'⚠️{policy_score}接近警戒'}"
+            f"🟢 新仓观察 | 浮亏{profit_pct:.2f}%，未破RISK_STOP不补仓；"
+            f"是否维持目标仓位取决于今日B/A/S重评 | 距-8%线{space_to_stop:.1f}%"
         )
 
     # 常规持有
@@ -821,7 +821,10 @@ def generate_wave_action(
             else f"🔴{policy_score}触发止损"
         )
     )
-    return f"✅ 价值持有（{profit_pct:+.2f}%） | 距-8%止损线还有{space_to_stop:.1f}% | 持仓第{holding_days}天/距T+21还有{days_left}天 | 政策分{policy_status}"
+    return (
+        f"✅ HOLD_TARGET候选（{profit_pct:+.2f}%） | 距-8%线{space_to_stop:.1f}% | "
+        f"持仓第{holding_days}天/距T+{max_days}还有{days_left}天 | 基础逻辑分{policy_status}"
+    )
 
 
 # ============================================================
@@ -975,6 +978,7 @@ def scan_holdings_with_wave_management(
                 "symbol": code.replace("sh", "").replace("sz", ""),
                 "price": price,
                 "name": h["name"],
+                "value": market_value,
                 "wave_type": h["wave_type"],
                 "emoji": emoji,
                 "phase_desc": phase_desc,
@@ -1032,6 +1036,7 @@ def scan_etf_pool(etf_pool: Dict, holding_symbols: set, realtime: Dict):
         last = history.iloc[-1]
         rsi = calculate_rsi(history, 14)
         ma20 = last["ma20"] if pd.notna(last["ma20"]) else rt["price"]
+        ma20_deviation_pct = ((rt["price"] / ma20 - 1) * 100) if ma20 > 0 else 0.0
         vol_ma5 = (
             last["vol_ma5"] if pd.notna(last["vol_ma5"]) and last["vol_ma5"] > 0 else 1
         )
@@ -1059,6 +1064,7 @@ def scan_etf_pool(etf_pool: Dict, holding_symbols: set, realtime: Dict):
                 "vol_ratio": vol_ratio,
                 "rsi": rsi,
                 "ma20": ma20,
+                "ma20_deviation_pct": ma20_deviation_pct,
                 "fund_flow": fund_flow,
                 "position": position,
             }
@@ -1077,9 +1083,18 @@ def scan_etf_pool(etf_pool: Dict, holding_symbols: set, realtime: Dict):
 def generate_report_v2(
     market, etf_list, holdings_data, wave_cards, total_value, cash_available
 ):
-    """生成 v3.0 格式报告"""
+    """生成 v3.1 格式报告：服务 v3.0 每日目标仓位重估。"""
     report = []
     day_num = (datetime.now() - datetime(2026, 2, 4)).days + 1
+    total_asset = total_value + cash_available
+    equity_ratio = (total_value / total_asset * 100) if total_asset > 0 else 0
+    holding_position_pct = {
+        h["symbol"]: (h.get("value", 0) / total_asset * 100) if total_asset > 0 else 0.0
+        for h in holdings_data
+    }
+    index_change_pct = (
+        market["index"].get("change_pct", 0.0) if market["index"].get("ok") else 0.0
+    )
 
     report.append(f"# 📡 X-Plan波段扫描 Day {day_num}\n")
 
@@ -1125,6 +1140,9 @@ def generate_report_v2(
     report.append("## 🎯 持仓波段管理卡\n")
     if wave_cards:
         for card in wave_cards:
+            current_position_pct = (
+                card.get("value", 0) / total_asset * 100 if total_asset > 0 else 0.0
+            )
             profit_emoji = (
                 "🟢"
                 if card["profit_pct"] > 0
@@ -1136,13 +1154,14 @@ def generate_report_v2(
             if ps is None:
                 policy_display = "未获取"
             elif ps < POLICY_LOGIC_STOP_THRESHOLD:
-                policy_display = f"🔴 {ps}分（已触发逻辑止损）"
+                policy_display = f"🔴 {ps}分（已触发逻辑证伪）"
             elif ps < 20:
                 policy_display = f"🟡 {ps}分（接近警戒线15）"
             else:
                 policy_display = f"🟢 {ps}分（安全）"
 
             report.append(f"### 📍 {card['symbol']} {card['name']} ({card['wave_type']})\n")
+            report.append(f"**当前仓位:** {current_position_pct:.1f}%（按账户总市值）")
             report.append(f"**波段状态:** {card['emoji']} {card['phase_desc']}")
             report.append(f"**当前盈亏:** {profit_emoji} {card['profit_pct']:+.2f}% | 现价 {card['price']:.3f}")
             report.append(
@@ -1151,23 +1170,25 @@ def generate_report_v2(
             report.append(
                 f"**风控参数:** 🛑 硬止损价 {card['hard_stop_price']:.3f}（距-8%线还有{card['space_to_hard_stop']:.1f}%）| ⏳ 第{card['holding_days']}天/距T+21还有{card['days_left']}天"
             )
-            report.append(f"**政策分:** {policy_display}")
+            report.append(f"**基础逻辑分:** {policy_display}")
             report.append(f"**今日行动:** {card['action']}")
-            report.append(f"**动态止盈价:** 📈 {card['stop_loss']:.3f}\n")
+            report.append(f"**风控参考价:** 📈 {card['stop_loss']:.3f}\n")
     else:
         report.append("- 💤 当前无持仓\n")
 
     report.append("\n## 📊 扫描数据（原始数据）\n")
     report.append(
-        "| 代码 | 名称 | 现价 | 涨跌% | 量比 | RSI | MA20 | 资金流向 | 政策分 | 持仓 |"
+        "| 代码 | 名称 | 现价 | 涨跌% | 量比 | RSI | MA20 | MA20偏离% | 超额沪深300% | 资金流向 | 基础逻辑分 | 当前仓位% | 持仓 |"
     )
     report.append(
-        "|------|------|------|-------|------|-----|------|----------|--------|------|"
+        "|------|------|------|-------|------|-----|------|-----------|--------------|----------|------------|----------|------|"
     )
     for etf in etf_list:
         change_emoji = "🔴" if etf["change_pct"] < 0 else "🟢"
+        excess_pct = etf["change_pct"] - index_change_pct
+        current_position_pct = holding_position_pct.get(etf["symbol"], 0.0)
         report.append(
-            f"| {etf['symbol']} | {etf['name']} | {etf['price']:.3f} | {change_emoji}{etf['change_pct']:+.2f}% | {etf['vol_ratio']:.2f} | {etf['rsi']:.0f} | {etf['ma20']:.3f} | {etf['fund_flow']} | {etf['policy']} | {etf['position']} |"
+            f"| {etf['symbol']} | {etf['name']} | {etf['price']:.3f} | {change_emoji}{etf['change_pct']:+.2f}% | {etf['vol_ratio']:.2f} | {etf['rsi']:.0f} | {etf['ma20']:.3f} | {etf['ma20_deviation_pct']:+.2f}% | {excess_pct:+.2f}% | {etf['fund_flow']} | {etf['policy']} | {current_position_pct:.1f}% | {etf['position']} |"
         )
 
     report.append("\n## 🌡️ 市场环境\n")
@@ -1182,23 +1203,28 @@ def generate_report_v2(
         )
 
     report.append("## 💰 资金状态\n")
-    total_asset = total_value + cash_available
-    equity_ratio = (total_value / total_asset * 100) if total_asset > 0 else 0
-    position_emoji = "🟢" if equity_ratio < 30 else "🟡" if equity_ratio < 50 else "🔴"
+    position_emoji = "🟢" if equity_ratio < 35 else "🟡" if equity_ratio <= 65 else "🔴"
+    cap_note = "可新增/加仓" if equity_ratio <= 65 else "上涨漂移超过65%，不强制卖，但禁止新增/加仓"
 
     report.append(f"**💵 可用资金:** {cash_available:,.2f}元")
     report.append(f"**📊 持仓市值:** {total_value:,.2f}元")
-    report.append(f"**💼 总资产:** {total_asset:,.2f}元")
-    report.append(f"**{position_emoji} 权益仓位:** {equity_ratio:.1f}%\n")
+    report.append(f"**💼 账户总市值:** {total_asset:,.2f}元（可用现金 + 全部ETF持仓市值）")
+    report.append(f"**{position_emoji} 总权益仓位:** {equity_ratio:.1f}%")
+    report.append(f"**🎚️ 总仓位上限:** 65%（{cap_note}）\n")
 
-    report.append("---\n## 📝 DeepSeek任务\n")
-    report.append("请基于四维评分体系（政策30+技术25+情绪20+风险收益25）分析并输出：\n")
-    report.append("1. **持仓处理指令**（基于波段管理卡；若政策分<15请确认逻辑止损）")
-    report.append("2. **新机会评分与仓位建议**（基于扫描数据，≥75分才列出）")
-    report.append("3. **如买入卖出，告知我具体的份额**")
-    report.append("4. **执行时间建议**（14:55-15:00）\n")
+    report.append("---\n## 📝 AI目标仓位任务\n")
+    report.append(f"请按 X-Plan {METHODOLOGY_VERSION} 每日一次目标仓位系统输出，不要使用“酌情、小仓、10%-15%”等浮动表述。\n")
+    report.append("1. **横向比较全池候选与现有持仓**：资金只流向今日更强的标的。")
+    report.append("2. **固定目标仓位档**：0% / 10% / 15% / 20%。B=10%，A=15%，S=20%。")
+    report.append("3. **动作由目标仓位差决定**：今日目标高于当前仓位才ADD/BUY，低于当前仓位才REDUCE/SELL。")
+    report.append("4. **总权益仓位上限65%**：若已因上涨漂移超过65%，不强制卖，但禁止新增/加仓。")
+    report.append("5. **SELL/REDUCE原因必须用规则代码**：RISK_STOP / TREND_BREAK / TIME_FAIL / SIGNAL_DOWNGRADE / PROFIT_WEAKEN / SWITCH_OUT / OVERHEAT_HOLD。")
+    report.append("6. **缺关键字段时只能降级或WATCH_DATA_GAP，不得猜测升级。**\n")
+    report.append("操作清单必须使用以下表格格式：\n")
+    report.append("| 操作编号 | 类型 | 代码 | 名称 | 当前目标仓位% | 今日目标仓位% | 调整仓位 | 规则代码 | 信号等级 | 中文操作依据 | 关键指标 |")
+    report.append("|---|---|---|---|---:|---:|---:|---|---|---|---|")
     report.append(
-        f"*📡 数据来源: 新浪财经 + AKShare* \n*🕐 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}* \n*📖 方法论版本: v{SYSTEM_VERSION}（{METHODOLOGY_DESC}）*"
+        f"*📡 数据来源: 新浪财经 + AKShare* \n*🕐 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}* \n*📖 方法论版本: {METHODOLOGY_DESC} / scanner v{SYSTEM_VERSION}*"
     )
 
     return "\n".join(report)
@@ -1210,9 +1236,10 @@ def generate_report_v2(
 
 
 def main(force_refresh=False):
+    validate_document_versions()
     print("\n" + "=" * 80)
     print(f"🚀 {SYSTEM_NAME} v{SYSTEM_VERSION}")
-    print("⭐ 价值波段 | 逻辑止损(政策分<15) | 时间止损T+21 | 动态止盈机制")
+    print(f"⭐ {METHODOLOGY_VERSION}目标仓位 | 单品20% | 总仓位65% | 横向择优 | 结构化规则代码")
     print("=" * 80)
 
     try:
@@ -1262,7 +1289,7 @@ def main(force_refresh=False):
         print(report)
         print("=" * 80)
         print("\n✅ 扫描完成！")
-        print("\n💡 下一步：复制上面的报告，发送给DeepSeek或Gemini进行四维评分分析")
+        print("\n💡 下一步：由正式 DeepSeek 链路生成目标仓位分析")
 
     except KeyboardInterrupt:
         print("\n⚠️ 用户中断")

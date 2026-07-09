@@ -500,6 +500,7 @@ function renderAll() {
         <div class="card-expand-indicator" aria-hidden="true">▾</div>
       </div>
       <div class="card-edit${isOpen ? ' open' : ''}" id="edit-${fullIdx}">
+        <div class="edit-correction-note">更正持仓（仅纠错，不代表买卖交易）</div>
         <div class="edit-row">
           <div class="edit-field">
             <div class="field-label">数量</div>
@@ -515,10 +516,11 @@ function renderAll() {
           <input type="date" id="ed-${fullIdx}" value="${h.buy_date}">
         </div>
         <div class="edit-save-row">
-          <button class="btn btn-primary edit-save-btn" onclick="saveCard(${fullIdx})">保存</button>
+          <button class="btn btn-primary edit-save-btn" onclick="saveCard(${fullIdx})">确认更正</button>
           <button class="btn btn-ghost edit-cancel-btn" onclick="toggleEdit(${fullIdx})">取消</button>
         </div>
         <div class="edit-action-row">
+          <button class="card-btn card-btn-add" onclick="openAdd(${fullIdx})">加仓</button>
           <button class="card-btn card-btn-reduce" onclick="openReduce(${fullIdx})">减仓</button>
           <button class="card-btn card-btn-close" onclick="closePosition(${fullIdx})">清仓</button>
         </div>
@@ -699,11 +701,14 @@ function reasonOptionsFor(symbol, types = []) {
     const sameSymbol = normalized && normalizeFullSymbol(action.code) === normalized;
     return sameSymbol && (!allowed.length || allowed.includes(action.type));
   });
-  const options = rows.map(action => ({
+  return rows.map(action => ({
     label: `${action.actionId} · ${action.reasonZh || action.note}（${action.ruleCode}）`,
     reason: actionToReason(action),
   }));
-  options.push({
+}
+
+function manualReasonOption() {
+  return {
     label: '人工补录（不计入方法论统计）',
     reason: {
       ai_action_id: '',
@@ -715,18 +720,76 @@ function reasonOptionsFor(symbol, types = []) {
       position_delta_pct: null,
       data_confidence: 'manual',
     },
-  });
-  return options;
+  };
 }
 
 function fillReasonSelect(selectId, symbol, types, preferredRule = '') {
   const select = document.getElementById(selectId);
   if (!select) return;
+  const normalizedTypes = Array.isArray(types) ? types : [types];
   const options = reasonOptionsFor(symbol, types);
-  select.innerHTML = options.map((item, idx) => {
-    const selected = preferredRule && item.reason.rule_code === preferredRule ? ' selected' : (!preferredRule && idx === 0 ? ' selected' : '');
-    return `<option value="${idx}" data-reason="${escapeHtml(JSON.stringify(item.reason))}"${selected}>${escapeHtml(item.label)}</option>`;
-  }).join('');
+  const status = document.getElementById(`${selectId}-status`);
+  const manualButton = document.getElementById(`${selectId}-manual`);
+  select.dataset.reasonSymbol = symbol || '';
+  select.dataset.reasonTypes = JSON.stringify(normalizedTypes);
+  select.dataset.preferredRule = preferredRule || '';
+  select.dataset.manualOverride = 'false';
+
+  if (options.length) {
+    select.disabled = false;
+    select.innerHTML = options.map((item, idx) => {
+      const selected = preferredRule && item.reason.rule_code === preferredRule ? ' selected' : (!preferredRule && idx === 0 ? ' selected' : '');
+      return `<option value="${idx}" data-reason="${escapeHtml(JSON.stringify(item.reason))}"${selected}>${escapeHtml(item.label)}</option>`;
+    }).join('');
+    if (status) {
+      status.className = 'reason-status reason-status-ok';
+      status.textContent = `已匹配当日 AI 清单（${options.length} 条）`;
+    }
+  } else {
+    select.disabled = true;
+    select.innerHTML = '<option value="">今日 AI 清单无此代码与动作</option>';
+    if (status) {
+      status.className = 'reason-status reason-status-error';
+      status.textContent = symbol
+        ? '未匹配到当日 AI 操作，不能按方法论登记。'
+        : '请先输入证券代码，以匹配当日 AI 操作。';
+    }
+  }
+  if (manualButton) {
+    manualButton.textContent = '转人工补录';
+    manualButton.hidden = !symbol;
+  }
+}
+
+function toggleManualReason(selectId) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  if (select.dataset.manualOverride === 'true') {
+    fillReasonSelect(
+      selectId,
+      select.dataset.reasonSymbol || '',
+      JSON.parse(select.dataset.reasonTypes || '[]'),
+      select.dataset.preferredRule || '',
+    );
+    return;
+  }
+  if (!confirm('人工补录不计入方法论有效性统计。仅用于纠错或补历史，确认继续？')) return;
+  const item = manualReasonOption();
+  select.disabled = false;
+  select.dataset.manualOverride = 'true';
+  select.innerHTML = `<option value="manual" data-reason="${escapeHtml(JSON.stringify(item.reason))}" selected>${escapeHtml(item.label)}</option>`;
+  const status = document.getElementById(`${selectId}-status`);
+  const manualButton = document.getElementById(`${selectId}-manual`);
+  if (status) {
+    status.className = 'reason-status reason-status-manual';
+    status.textContent = '人工补录已启用，本次记录不会进入方法论统计。';
+  }
+  if (manualButton) manualButton.textContent = '恢复 AI 匹配';
+}
+
+function hasValidReason(selectId) {
+  const select = document.getElementById(selectId);
+  return !!select && !select.disabled && !!select.selectedOptions?.[0]?.dataset.reason;
 }
 
 function renderQuickGuide(data, aiText) {
@@ -1281,6 +1344,8 @@ function onSymbolInput(val) {
     const symbol = normalizeFullSymbol(val);
     const existing = (holdingsData.holdings || []).some(h => normalizeFullSymbol(h.symbol) === symbol && Number(h.qty) > 0);
     fillReasonSelect('new-reason', symbol, existing ? ['ADD'] : ['BUY']);
+  } else {
+    fillReasonSelect('new-reason', '', ['BUY', 'ADD']);
   }
   updateNewPreview();
   const list = document.getElementById('suggest-list');
@@ -1322,6 +1387,10 @@ async function addHolding() {
   if (isNaN(cost) || cost <= 0) { toast('成本价无效', 'error'); return; }
   if (isNaN(cashAfter) || cashAfter < 0) { toast('操作后可用资金无效', 'error'); return; }
   if (!date) { toast('请选择日期', 'error'); return; }
+  if (!hasValidReason('new-reason')) {
+    toast('未匹配到当日 AI 操作；如属纠错或补历史，请先显式启用人工补录', 'error');
+    return;
+  }
 
 // 解析完整代码（支持智能判别沪深前缀与自动纠错）
   let symbol = document.getElementById('new-symbol').dataset.fullCode || '';
@@ -1400,8 +1469,19 @@ function makeClientLotId(symbol, buyDate) {
 }
 
 // ============================================================
-// 减仓
+// 加仓 / 减仓
 // ============================================================
+function openAdd(idx) {
+  const h = holdingsData.holdings[idx];
+  openOperationDialog('ADD', idx, {
+    title: `加仓 ${h.symbol}`,
+    qty: h.qty,
+    cost: h.cost,
+    cash: holdingsData.cash_available,
+    reasonTypes: ['ADD'],
+  });
+}
+
 function openReduce(idx) {
   const h = holdingsData.holdings[idx];
   openOperationDialog('REDUCE', idx, {
@@ -1472,6 +1552,8 @@ function openOperationDialog(mode, idx, options = {}) {
   document.getElementById('operation-qty').value = options.qty ?? h?.qty ?? '';
   document.getElementById('operation-cost').value = options.cost ?? h?.cost ?? '';
   document.getElementById('operation-cash').value = options.cash ?? holdingsData.cash_available ?? '';
+  document.getElementById('operation-qty-label').textContent =
+    mode === 'ADD' ? '操作后总份额' : '操作后剩余份额';
   document.getElementById('operation-qty-wrap').style.display = mode === 'CORRECT_REASON' ? 'none' : 'block';
   document.getElementById('operation-cost-wrap').style.display = ['REDUCE', 'SELL', 'CORRECT_REASON'].includes(mode) ? 'none' : 'block';
   document.getElementById('operation-cash-wrap').style.display = mode === 'CORRECT_REASON' ? 'none' : 'block';
@@ -1480,7 +1562,9 @@ function openOperationDialog(mode, idx, options = {}) {
   document.getElementById('operation-preview').textContent =
     mode === 'CORRECT_REASON'
       ? '只更正操作依据，不改变持仓和资金。原记录会保留并标记为已更正。'
-      : `当前 ${h?.qty ?? 0} 份；请填写操作后的剩余份额和可用资金。`;
+      : mode === 'ADD'
+        ? `当前 ${h?.qty ?? 0} 份；请填写加仓后的总份额、持仓成本和可用资金。`
+        : `当前 ${h?.qty ?? 0} 份；请填写操作后的剩余份额和可用资金。`;
   dialog.showModal();
 }
 
@@ -1488,10 +1572,33 @@ function closeOperationDialog() {
   document.getElementById('operation-dialog').close();
 }
 
+function validateOperationInput(mode, currentQty, qtyAfter, costAfter) {
+  if (mode === 'ADD') {
+    if (!Number.isFinite(qtyAfter) || qtyAfter <= Number(currentQty)) {
+      return '加仓后的总份额必须大于当前持仓';
+    }
+    if (!Number.isFinite(costAfter) || costAfter <= 0) {
+      return '加仓后的持仓成本无效';
+    }
+    return '';
+  }
+  if (!Number.isFinite(qtyAfter) || qtyAfter < 0 || qtyAfter >= Number(currentQty)) {
+    return '剩余份额必须小于当前持仓且不小于0';
+  }
+  if (mode === 'SELL' && qtyAfter !== 0) {
+    return '清仓后的剩余份额必须为0';
+  }
+  return '';
+}
+
 async function confirmOperationDialog() {
   const mode = document.getElementById('operation-mode').value;
   const idx = parseInt(document.getElementById('operation-index').value);
   const targetEventId = document.getElementById('operation-event-id').value;
+  if (!hasValidReason('operation-reason')) {
+    toast('未匹配到当日 AI 操作；如属纠错或补历史，请先显式启用人工补录', 'error');
+    return;
+  }
   const reason = selectedReason('operation-reason');
   if (mode === 'CORRECT_REASON') {
     const original = executionEvents.find(row => row.event_id === targetEventId);
@@ -1509,20 +1616,20 @@ async function confirmOperationDialog() {
   const h = holdingsData.holdings[idx];
   if (!h) { toast('持仓不存在，请刷新', 'error'); return; }
   const qtyAfter = parseInt(document.getElementById('operation-qty').value);
+  const costAfter = parseFloat(document.getElementById('operation-cost').value);
   const cashAfter = parseFloat(document.getElementById('operation-cash').value);
-  if (!Number.isFinite(qtyAfter) || qtyAfter < 0 || qtyAfter >= Number(h.qty)) {
-    toast('剩余份额必须小于当前持仓且不小于0', 'error'); return;
-  }
+  const operationError = validateOperationInput(mode, h.qty, qtyAfter, costAfter);
+  if (operationError) { toast(operationError, 'error'); return; }
   if (!Number.isFinite(cashAfter) || cashAfter < 0) {
     toast('操作后可用资金无效', 'error'); return;
-  }
-  if (mode === 'SELL' && qtyAfter !== 0) {
-    toast('清仓后的剩余份额必须为0', 'error'); return;
   }
   const before = deepClone(holdingsData);
   const after = deepClone(holdingsData);
   const symbol = h.symbol;
-  if (qtyAfter === 0) {
+  if (mode === 'ADD') {
+    after.holdings[idx].qty = qtyAfter;
+    after.holdings[idx].cost = costAfter;
+  } else if (qtyAfter === 0) {
     after.holdings.splice(idx, 1);
   } else {
     after.holdings[idx].qty = qtyAfter;
@@ -1552,8 +1659,12 @@ function canReverseEvent(event) {
   if (!['BUY', 'ADD', 'REDUCE', 'SELL', 'CASH_UPDATE', 'CORRECT_POSITION'].includes(event.event_type)) return false;
   if (eventDisplayState(event).status === '已撤销') return false;
   const index = executionEvents.findIndex(row => row.event_id === event.event_id);
-  return !executionEvents.slice(index + 1).some(row =>
-    !['CORRECT_REASON', 'REVERSE_EVENT'].includes(row.event_type) &&
+  const laterEffectiveEvents = executionEvents.slice(index + 1)
+    .filter(row => !['CORRECT_REASON', 'REVERSE_EVENT'].includes(row.event_type));
+  if (event.event_type === 'CASH_UPDATE') {
+    return laterEffectiveEvents.length === 0;
+  }
+  return !laterEffectiveEvents.some(row =>
     event.symbol && normalizeFullSymbol(row.symbol) === normalizeFullSymbol(event.symbol)
   );
 }
@@ -1576,8 +1687,9 @@ function renderExecutionHistory() {
     const qtyText = event.symbol
       ? `${Number(event.qty_before || 0).toLocaleString()} → ${Number(event.qty_after || 0).toLocaleString()} 份`
       : `资金 ${Number(event.cash_before || 0).toFixed(2)} → ${Number(event.cash_after || 0).toFixed(2)}`;
+    const canCorrectReason = ['BUY', 'ADD', 'REDUCE', 'SELL'].includes(event.event_type);
     const actions = display.status === '已撤销' ? '' : `
-      <button onclick="correctEventReason('${event.event_id}')">更正原因</button>
+      ${canCorrectReason ? `<button onclick="correctEventReason('${event.event_id}')">更正原因</button>` : ''}
       ${canReverseEvent(event) ? `<button class="danger" onclick="reverseExecution('${event.event_id}')">撤销登记</button>` : ''}
     `;
     return `<div class="execution-row execution-${display.cls}">

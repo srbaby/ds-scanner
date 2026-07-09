@@ -111,25 +111,6 @@
                 </div>
             </div>
 
-            <!-- 操作流水 -->
-            <div class="max-w">
-                <section class="execution-panel">
-                    <div class="execution-head">
-                        <div>
-                            <div class="execution-title">操作记录</div>
-                            <div class="execution-meta" id="execution-meta">
-                                今日操作与最近更正会保留在 Gist
-                            </div>
-                        </div>
-                    </div>
-                    <div id="execution-list" class="execution-list">
-                        <div class="empty-state">
-                            <div>暂无操作记录</div>
-                        </div>
-                    </div>
-                </section>
-            </div>
-
             <!-- 快速操作指引 + AI分析（默认折叠） + 原始扫描数据（默认折叠） -->
             <div class="max-w">
                 <section class="quick-guide" id="quick-guide" hidden>
@@ -242,6 +223,25 @@
                 </div>
             </div>
 
+            <!-- 操作流水：放在页面内容最底部，避免挤占日常操作入口 -->
+            <div class="max-w">
+                <section class="execution-panel">
+                    <div class="execution-head">
+                        <div>
+                            <div class="execution-title">操作记录</div>
+                            <div class="execution-meta" id="execution-meta">
+                                今日操作与最近更正会保留在 Gist
+                            </div>
+                        </div>
+                    </div>
+                    <div id="execution-list" class="execution-list">
+                        <div class="empty-state">
+                            <div>暂无操作记录</div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
             <!-- FAB -->
             <div class="fab-area">
                 <button
@@ -308,6 +308,12 @@
                 <div>
                     <div class="field-label">操作依据</div>
                     <select id="new-reason"></select>
+                    <div class="reason-control">
+                        <div class="reason-status" id="new-reason-status"></div>
+                        <button type="button" class="reason-manual-btn" id="new-reason-manual" onclick="toggleManualReason('new-reason')">
+                            转人工补录
+                        </button>
+                    </div>
                 </div>
                 <div>
                     <div class="field-label">操作后可用资金</div>
@@ -348,7 +354,7 @@
                 <input type="hidden" id="operation-mode" />
                 <input type="hidden" id="operation-event-id" />
                 <div id="operation-qty-wrap">
-                    <div class="field-label">操作后剩余份额</div>
+                    <div class="field-label" id="operation-qty-label">操作后剩余份额</div>
                     <input type="number" id="operation-qty" inputmode="numeric" step="100" />
                 </div>
                 <div id="operation-cost-wrap">
@@ -362,6 +368,12 @@
                 <div>
                     <div class="field-label">操作依据</div>
                     <select id="operation-reason"></select>
+                    <div class="reason-control">
+                        <div class="reason-status" id="operation-reason-status"></div>
+                        <button type="button" class="reason-manual-btn" id="operation-reason-manual" onclick="toggleManualReason('operation-reason')">
+                            转人工补录
+                        </button>
+                    </div>
                 </div>
                 <div class="operation-preview" id="operation-preview"></div>
                 <div class="drawer-actions">

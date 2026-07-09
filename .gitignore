@@ -23,6 +23,9 @@ decision.json
 # Claude Code 本地会话设置
 .claude/
 
+# 本地 AI 助手工作目录
+.workbuddy/
+
 # macOS 桌面服务文件，不入仓
 .DS_Store
 

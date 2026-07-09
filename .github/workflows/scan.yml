@@ -32,6 +32,14 @@ jobs:
       - name: 安装Python依赖
         run: pip install requests pandas akshare lxml beautifulsoup4
 
+      - name: 运行v3.0回归测试
+        run: |
+          node js/test_app.js
+          PYTHONPATH=automation python -m unittest \
+            automation/test_send_report.py \
+            automation/test_versioning.py \
+            automation/test_observe.py
+
       - name: 运行扫描并保存报告
         run: |
           python automation/ds_scanner.py
@@ -51,7 +59,7 @@ jobs:
           DEEPSEEK_MAX_TOKENS: "8192"
           DEEPSEEK_RETRIES: "1"
           DEEPSEEK_RETRY_SLEEP_SECONDS: "20"
-        # 失败不阻塞后续Bark推送（report原文优先）
+        # 失败不阻塞后续Bark摘要；摘要会明确提示AI失败并跳转看板。
         continue-on-error: true
 
       - name: Bark推送报告

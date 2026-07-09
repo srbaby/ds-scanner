@@ -63,13 +63,14 @@ def _gist_headers():
 
 
 def write_dashboard(data: dict) -> bool:
-    """写入 Gist；未配置 Gist 时降级写本地文件，返回是否写入 Gist 成功"""
+    """始终写本地运行时副本，再写入 Gist；返回是否写入 Gist 成功。"""
     content = json.dumps(data, ensure_ascii=False, indent=2)
+    with open(DASHBOARD_FILE, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"✅ {DASHBOARD_FILE} 已生成本地运行时副本")
 
     if not GIST_ID or not GITHUB_TOKEN:
-        print("⚠️ 未配置 DS_SCANNER_GIST_ID/GITHUB_TOKEN，降级写本地 dashboard.json")
-        with open(DASHBOARD_FILE, "w", encoding="utf-8") as f:
-            f.write(content)
+        print("⚠️ 未配置 DS_SCANNER_GIST_ID/GITHUB_TOKEN，仅保留本地 dashboard.json")
         return False
 
     try:
@@ -87,9 +88,7 @@ def write_dashboard(data: dict) -> bool:
     except Exception as e:
         print(f"⚠️ Gist 写入异常: {e}")
 
-    # Gist写入失败时也落本地一份，避免静默丢失
-    with open(DASHBOARD_FILE, "w", encoding="utf-8") as f:
-        f.write(content)
+    # 本地副本已在请求前生成，供后续 Bark 摘要步骤稳定读取。
     return False
 
 

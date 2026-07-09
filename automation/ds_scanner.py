@@ -1751,7 +1751,7 @@ def main(force_refresh=False):
         print(report)
         print("=" * 80)
         print("\n✅ 扫描完成！")
-        print("\n💡 下一步：由 DeepSeek 对扫描器权威决策做独立审计")
+        print("\n💡 扫描器权威决策已完成；每日流程不调用AI")
 
     except KeyboardInterrupt:
         print("\n⚠️ 用户中断")

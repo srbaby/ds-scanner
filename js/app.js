@@ -914,7 +914,12 @@ function renderDashboard(data) {
 
   const hasDecision = !!data?.decision?.operations?.length;
   const hasQuickGuide = renderQuickGuide(data, (data.ai || {}).text || '');
-  if (ai.ok && ai.text) {
+  if (ai.enabled === false) {
+    aiSection.classList.remove('ai-err');
+    aiBody.innerHTML = '<div class="empty-state"><div class="empty-icon">📡</div><div>每日AI审计已停用</div><div class="empty-hint">操作清单由扫描器确定性生成</div></div>';
+    aiSection.open = false;
+    reportSection.open = false;
+  } else if (ai.ok && ai.text) {
     aiSection.classList.remove('ai-err');
     aiBody.innerHTML = renderMarkdown(ai.text);
     aiSection.open = !hasQuickGuide;

@@ -9,6 +9,7 @@ from versioning import METHODOLOGY_VERSION, validate_document_versions
 BARK_ICON = "https://cdn.jsdelivr.net/gh/srbaby/ds-scanner@main/favicon.png"
 DASHBOARD_URL = "https://stock.bailuzun.com"
 DASHBOARD_FILE = "dashboard.json"
+DECISION_FILE = "decision.json"
 # APNs 单条 payload 约 4KB；为标题、图标、分组、URL 等元数据预留足够空间。
 MAX_BARK_BODY_BYTES = 2800
 TRANSACTION_ACTIONS = {"BUY", "ADD", "REDUCE", "SELL"}
@@ -152,7 +153,9 @@ def build_bark_body(report_text, dashboard_data=None):
                 break
         if warnings:
             lines.extend(["", "异常与降级", *warnings])
-        if audit.get("ok"):
+        if audit.get("enabled") is False:
+            pass
+        elif audit.get("ok"):
             status = next(
                 (value for value in ("CONFLICT", "WARN", "PASS") if value in audit_text),
                 "PASS",
@@ -191,6 +194,28 @@ def load_dashboard(path=DASHBOARD_FILE):
         return None
 
 
+def load_decision(path=DECISION_FILE):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"⚠️ 无法读取 {path}: {exc}")
+        return None
+
+
+def dashboard_with_decision_fallback(dashboard_data=None, decision_data=None):
+    dashboard_data = dict(dashboard_data or {})
+    if not dashboard_data.get("decision") and decision_data:
+        dashboard_data["decision"] = decision_data
+    if not dashboard_data.get("audit"):
+        dashboard_data["audit"] = {
+            "ok": False,
+            "text": "",
+            "error": "AI审计不可用；已使用扫描器权威决策兜底",
+        }
+    return dashboard_data
+
+
 def build_payload(report_text, today=None, dashboard_data=None):
     today = today or datetime.now().strftime('%Y-%m-%d')
     return {
@@ -207,11 +232,6 @@ def build_payload(report_text, today=None, dashboard_data=None):
 def send_bark(report_text, dashboard_data=None, post=requests.post, keys=None):
     supplied_keys = keys is not None
     keys = list(keys) if supplied_keys else [os.environ['BARK_KEY']]
-    # 老婆的推送Key（可选，配置后同步推送）
-    if not supplied_keys:
-        wife_key = os.environ.get('BARK_KEY_WIFE', '').strip()
-        if wife_key:
-            keys.append(wife_key)
 
     payload = build_payload(report_text, dashboard_data=dashboard_data)
     failures = []
@@ -244,4 +264,5 @@ if __name__ == '__main__':
     with open('report.txt', 'r', encoding='utf-8') as f:
         report = f.read()
 
-    send_bark(report, load_dashboard())
+    dashboard = dashboard_with_decision_fallback(load_dashboard(), load_decision())
+    send_bark(report, dashboard)

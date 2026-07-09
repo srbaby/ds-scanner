@@ -24,6 +24,7 @@ jobs:
           cache-dependency-path: |
             automation/ds_scanner.py
             automation/ai_review.py
+            automation/gemini_review.py
             automation/generate_dashboard.py
             automation/send_report.py
             automation/versioning.py
@@ -37,6 +38,7 @@ jobs:
           node js/test_app.js
           PYTHONPATH=automation python -m unittest \
             automation/test_ds_scanner.py \
+            automation/test_gemini_review.py \
             automation/test_send_report.py \
             automation/test_versioning.py \
             automation/test_observe.py
@@ -50,21 +52,16 @@ jobs:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
-      - name: DeepSeek Flash分析并写入看板
+      - name: 写入扫描器看板（不调用AI）
         run: python automation/generate_dashboard.py
         env:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          DEEPSEEK_MODEL: deepseek-v4-flash
-          DEEPSEEK_MAX_TOKENS: "8192"
-          DEEPSEEK_RETRIES: "1"
-          DEEPSEEK_RETRY_SLEEP_SECONDS: "20"
-        # 失败不阻塞后续Bark摘要；摘要会明确提示AI失败并跳转看板。
+          AI_PROVIDER: none
+        # 看板写入失败不阻塞Bark；Bark可直接读取decision.json。
         continue-on-error: true
 
       - name: Bark推送报告
         run: python automation/send_report.py
         env:
           BARK_KEY: ${{ secrets.BARK_KEY }}
-          BARK_KEY_WIFE: ${{ secrets.BARK_KEY_WIFE }}

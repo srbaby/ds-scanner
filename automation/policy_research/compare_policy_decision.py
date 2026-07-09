@@ -247,7 +247,7 @@ def build_policy_watchlist(base_rows: List[Dict], shadow_rows: List[Dict], holdi
     ]
     return {
         "generated_at": common.now_str(),
-        "updated_frequency": "随每日扫描工作流更新；页面顶部 logo + Stock X 可强制重新读取最新 dashboard.json",
+        "updated_frequency": "随每日扫描工作流更新；点击页面顶部 logo 可刷新页面",
         "mode": "policy_event_shadow_watch_only",
         "summary": {
             "holdings_risk_count": len(holdings_risk),

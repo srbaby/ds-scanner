@@ -1,0 +1,175 @@
+{
+  "version": "2026-07-10",
+  "policy": {
+    "default_timeout_seconds": 12,
+    "max_items_per_source": 30,
+    "lookback_days": 7
+  },
+  "sources": [
+    {
+      "id": "gov_zhengce",
+      "name": "中国政府网政策库",
+      "rank": "S",
+      "region": "CN",
+      "url": "https://www.gov.cn/zhengce/zhengcewenjianku/index.htm",
+      "allowed_domains": [
+        "www.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "ndrc_policy",
+      "name": "国家发改委政策发布",
+      "rank": "S",
+      "region": "CN",
+      "url": "https://www.ndrc.gov.cn/xxgk/zcfb/",
+      "allowed_domains": [
+        "www.ndrc.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "miit_policy",
+      "name": "工信部政策文件",
+      "rank": "S",
+      "region": "CN",
+      "url": "https://www.miit.gov.cn/zwgk/zcwj/index.html",
+      "allowed_domains": [
+        "www.miit.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "mof_policy",
+      "name": "财政部政策发布",
+      "rank": "S",
+      "region": "CN",
+      "url": "https://www.mof.gov.cn/zhengwuxinxi/zhengcefabu/",
+      "allowed_domains": [
+        "www.mof.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "pbc_news",
+      "name": "中国人民银行新闻",
+      "rank": "S",
+      "region": "CN",
+      "url": "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html",
+      "allowed_domains": [
+        "www.pbc.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "csrc_policy",
+      "name": "证监会政策法规",
+      "rank": "S",
+      "region": "CN",
+      "url": "http://www.csrc.gov.cn/csrc/c100028/common_list.shtml",
+      "allowed_domains": [
+        "www.csrc.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "sse_notice",
+      "name": "上交所通知公告",
+      "rank": "A",
+      "region": "CN",
+      "url": "https://www.sse.com.cn/disclosure/announcement/general/",
+      "allowed_domains": [
+        "www.sse.com.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "szse_notice",
+      "name": "深交所通知公告",
+      "rank": "A",
+      "region": "CN",
+      "url": "https://www.szse.cn/disclosure/notice/index.html",
+      "allowed_domains": [
+        "www.szse.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "nea_news",
+      "name": "国家能源局",
+      "rank": "A",
+      "region": "CN",
+      "url": "https://www.nea.gov.cn/",
+      "allowed_domains": [
+        "www.nea.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "mofcom_news",
+      "name": "商务部新闻",
+      "rank": "A",
+      "region": "CN",
+      "url": "https://www.mofcom.gov.cn/",
+      "allowed_domains": [
+        "www.mofcom.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "whitehouse_news",
+      "name": "White House Statements",
+      "rank": "A",
+      "region": "US",
+      "url": "https://www.whitehouse.gov/briefing-room/statements-releases/",
+      "allowed_domains": [
+        "www.whitehouse.gov"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "bis_news",
+      "name": "US BIS News & Updates",
+      "rank": "A",
+      "region": "US",
+      "url": "https://www.bis.gov/",
+      "allowed_domains": [
+        "www.bis.gov"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "ustr_news",
+      "name": "USTR Press Releases",
+      "rank": "A",
+      "region": "US",
+      "url": "https://ustr.gov/about-us/policy-offices/press-office/press-releases",
+      "allowed_domains": [
+        "ustr.gov"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "xinhua_finance",
+      "name": "新华社财经",
+      "rank": "B",
+      "region": "CN",
+      "url": "http://www.news.cn/fortune/",
+      "allowed_domains": [
+        "www.news.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "stcn_news",
+      "name": "证券时报",
+      "rank": "B",
+      "region": "CN",
+      "url": "https://www.stcn.com/",
+      "allowed_domains": [
+        "www.stcn.com"
+      ],
+      "enabled": true
+    }
+  ]
+}

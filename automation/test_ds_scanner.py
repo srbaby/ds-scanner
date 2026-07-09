@@ -43,6 +43,14 @@ def signal(
 
 
 class ScannerDecisionTests(unittest.TestCase):
+    def test_execution_guidance_rounds_down_to_etf_lots(self):
+        guidance = ds_scanner.calculate_execution_guidance(
+            193155.64, 10, 2.328
+        )
+        self.assertEqual(guidance["recommended_shares"], 8200)
+        self.assertEqual(guidance["recommended_lots"], 82)
+        self.assertEqual(guidance["estimated_amount"], 19089.6)
+
     def test_four_dimensional_score_is_bounded_and_sums_to_total(self):
         score = ds_scanner.calculate_four_dimensional_score(
             15, 1.05, 1.0, 5, 1.5, "💰流入", 60, 2, 2, 0.02, 1.08

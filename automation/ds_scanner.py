@@ -28,6 +28,7 @@ X-Plan 波段验证系统 - 尾盘扫描器 v3.1
 """
 
 import json
+import math
 import os
 import time
 from datetime import datetime, timedelta
@@ -1295,6 +1296,33 @@ def _operation_action(current_pct: float, target_pct: float, holding: bool) -> s
     return "HOLD" if holding else "SKIP"
 
 
+def calculate_execution_guidance(
+    total_asset: float,
+    adjustment_pct: float,
+    reference_price: float,
+    lot_size: int = 100,
+) -> Optional[Dict]:
+    """把新增目标仓位换算为可申报的ETF份额，向下取整到整手。"""
+    if total_asset <= 0 or adjustment_pct <= 0 or reference_price <= 0 or lot_size <= 0:
+        return None
+    target_amount = total_asset * adjustment_pct / 100
+    lots = math.floor(target_amount / reference_price / lot_size)
+    shares = lots * lot_size
+    if shares <= 0:
+        return None
+    estimated_amount = shares * reference_price
+    return {
+        "lot_size": lot_size,
+        "reference_price": round(reference_price, 3),
+        "target_amount": round(target_amount, 2),
+        "recommended_shares": shares,
+        "recommended_lots": lots,
+        "estimated_amount": round(estimated_amount, 2),
+        "rounding_residual": round(target_amount - estimated_amount, 2),
+        "price_note": "按扫描参考价估算，实际成交价和可用资金以券商为准",
+    }
+
+
 def build_authoritative_decision(
     etf_list: List[Dict],
     holdings_data: List[Dict],
@@ -1437,6 +1465,14 @@ def build_authoritative_decision(
         if not row["holding"] and row["target_position_pct"] == 0:
             continue
         etf = row.get("etf") or {}
+        adjustment_pct = (
+            row["target_position_pct"] - row["current_target_position_pct"]
+        )
+        execution_guidance = calculate_execution_guidance(
+            total_asset,
+            adjustment_pct,
+            float(etf.get("price", 0) or 0),
+        )
         operations.append(
             {
                 "id": f"OP-{len(operations) + 1:02d}",
@@ -1445,7 +1481,7 @@ def build_authoritative_decision(
                 "name": row["name"],
                 "current_target_position_pct": row["current_target_position_pct"],
                 "target_position_pct": row["target_position_pct"],
-                "adjustment_pct": row["target_position_pct"] - row["current_target_position_pct"],
+                "adjustment_pct": adjustment_pct,
                 "rule_code": row["rule_code"],
                 "signal_grade": row["signal_grade"],
                 "reason": row["reason"],
@@ -1456,6 +1492,7 @@ def build_authoritative_decision(
                     "relative_hs300_strength_pct": round(etf.get("relative_strength_pct", 0), 2),
                     "fund_flow": etf.get("fund_flow", ""),
                 },
+                "execution_guidance": execution_guidance,
             }
         )
     if not any(row["action"] in {"BUY", "ADD", "REDUCE", "SELL"} for row in operations):
@@ -1653,6 +1690,13 @@ def generate_report_v2(
                 if metrics
                 else "无"
             )
+            guidance = op.get("execution_guidance") or {}
+            if guidance:
+                metrics_text += (
+                    f" 建议:{guidance['recommended_shares']}份/"
+                    f"{guidance['recommended_lots']}手"
+                    f" 参考金额:{guidance['estimated_amount']:.2f}元"
+                )
             report.append(
                 f"| {op['id']} | {op['action']} | {op['symbol']} | {op['name']} | "
                 f"{op['current_target_position_pct']}% | {op['target_position_pct']}% | "

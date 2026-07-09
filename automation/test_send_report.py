@@ -36,6 +36,13 @@ class SendReportTests(unittest.TestCase):
                         "signal_grade": "B",
                         "reason": "普通信号首次建仓",
                         "metrics": {"score": 76},
+                        "execution_guidance": {
+                            "reference_price": 2.328,
+                            "target_amount": 19315.56,
+                            "recommended_shares": 8200,
+                            "recommended_lots": 82,
+                            "estimated_amount": 19089.60,
+                        },
                     }
                 ]
             },
@@ -52,6 +59,7 @@ class SendReportTests(unittest.TestCase):
         self.assertIn("v3.1", payload["title"])
         self.assertNotIn("Gemini", payload["title"])
         self.assertIn("OP-01 BUY sh588800", payload["body"])
+        self.assertIn("8,200份（82手）", payload["body"])
         self.assertNotIn("扫描报告正文", payload["body"])
         self.assertEqual(payload["group"], "X-Plan扫描")
         self.assertEqual(payload["url"], "https://stock.bailuzun.com")

@@ -743,22 +743,23 @@ function fillReasonSelect(selectId, symbol, types, preferredRule = '') {
     }).join('');
     if (status) {
       status.className = 'reason-status reason-status-ok';
-      status.textContent = `已匹配当日 AI 清单（${options.length} 条）`;
+      status.textContent = `已匹配当日扫描器清单（${options.length} 条）`;
     }
   } else {
     select.disabled = true;
-    select.innerHTML = '<option value="">今日 AI 清单无此代码与动作</option>';
+    select.innerHTML = '<option value="">今日扫描器清单无此代码与动作</option>';
     if (status) {
       status.className = 'reason-status reason-status-error';
       status.textContent = symbol
-        ? '未匹配到当日 AI 操作，不能按方法论登记。'
-        : '请先输入证券代码，以匹配当日 AI 操作。';
+        ? '未匹配到当日扫描器操作，不能按方法论登记。'
+        : '请先输入证券代码，以匹配当日扫描器操作。';
     }
   }
   if (manualButton) {
     manualButton.textContent = '转人工补录';
     manualButton.hidden = !symbol;
   }
+  if (selectId === 'new-reason') renderBuyGuidance();
 }
 
 function toggleManualReason(selectId) {
@@ -784,7 +785,7 @@ function toggleManualReason(selectId) {
     status.className = 'reason-status reason-status-manual';
     status.textContent = '人工补录已启用，本次记录不会进入方法论统计。';
   }
-  if (manualButton) manualButton.textContent = '恢复 AI 匹配';
+  if (manualButton) manualButton.textContent = '恢复扫描器匹配';
 }
 
 function hasValidReason(selectId) {
@@ -808,6 +809,7 @@ function decisionOperationsToActions(operations) {
     qty: `${op.adjustment_pct > 0 ? '+' : ''}${op.adjustment_pct || 0}%`,
     note: op.reason || '',
     authority: 'scanner',
+    guidance: op.execution_guidance || null,
   }));
 }
 
@@ -1347,6 +1349,90 @@ async function saveCash() {
 // ============================================================
 // 买入建仓
 // ============================================================
+function calculateBuyGuidance(totalAsset, adjustmentPct, referencePrice, lotSize = 100) {
+  const total = Number(totalAsset);
+  const delta = Number(adjustmentPct);
+  const price = Number(referencePrice);
+  if (!(total > 0) || !(delta > 0) || !(price > 0) || !(lotSize > 0)) return null;
+  const targetAmount = total * delta / 100;
+  const lots = Math.floor(targetAmount / price / lotSize);
+  const shares = lots * lotSize;
+  if (shares <= 0) return null;
+  const estimatedAmount = shares * price;
+  return {
+    lot_size: lotSize,
+    reference_price: Number(price.toFixed(3)),
+    target_amount: Number(targetAmount.toFixed(2)),
+    recommended_shares: shares,
+    recommended_lots: lots,
+    estimated_amount: Number(estimatedAmount.toFixed(2)),
+    rounding_residual: Number((targetAmount - estimatedAmount).toFixed(2)),
+  };
+}
+
+function currentBuyGuidance() {
+  const raw = document.getElementById('new-symbol')?.value || '';
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length !== 6) return null;
+  const symbol = normalizeFullSymbol(
+    document.getElementById('new-symbol')?.dataset.fullCode || raw
+  );
+  const reason = selectedReason('new-reason');
+  const action = currentAiActions.find(item =>
+    item.actionId === reason.ai_action_id
+    && normalizeFullSymbol(item.code) === symbol
+    && ['BUY', 'ADD'].includes(item.type)
+  ) || currentAiActions.find(item =>
+    normalizeFullSymbol(item.code) === symbol && ['BUY', 'ADD'].includes(item.type)
+  );
+  if (!action) return null;
+
+  const signal = (dashboardData?.decision?.signals || []).find(item =>
+    normalizeFullSymbol(item.full_symbol || item.symbol) === symbol
+  );
+  const enteredPrice = Number(document.getElementById('new-cost')?.value);
+  const calculated = calculateBuyGuidance(
+    dashboardData?.decision?.portfolio?.total_asset,
+    Number(action.delta),
+    enteredPrice > 0 ? enteredPrice : signal?.price,
+  );
+  return calculated || action.guidance || null;
+}
+
+function renderBuyGuidance() {
+  const el = document.getElementById('new-guidance');
+  if (!el) return;
+  const guidance = currentBuyGuidance();
+  if (!guidance) {
+    el.innerHTML = '输入当日 BUY / ADD 标的后显示建议份额';
+    return;
+  }
+  el.innerHTML = `
+    <strong>扫描器执行参考</strong><br>
+    目标新增约 ¥${Number(guidance.target_amount).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}，
+    建议 <strong>${Number(guidance.recommended_shares).toLocaleString()} 份
+    （${Number(guidance.recommended_lots)} 手）</strong><br>
+    扫描参考价 ${Number(guidance.reference_price).toFixed(3)}，
+    预计占用 ¥${Number(guidance.estimated_amount).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}
+    <div><button type="button" class="reason-manual-btn" onclick="applyBuyGuidance()">填入建议</button></div>
+    <small>实际成交价、费用和可用资金以券商为准</small>`;
+}
+
+function applyBuyGuidance() {
+  const guidance = currentBuyGuidance();
+  if (!guidance) {
+    toast('当前没有可用的扫描器份额建议', 'error');
+    return;
+  }
+  document.getElementById('new-qty').value = guidance.recommended_shares;
+  document.getElementById('new-cost').value = Number(guidance.reference_price).toFixed(3);
+  document.getElementById('new-cash').value = Math.max(
+    0,
+    Number(holdingsData.cash_available || 0) - Number(guidance.estimated_amount || 0)
+  ).toFixed(2);
+  updateNewPreview();
+}
+
 function openDrawer() {
   document.getElementById('new-symbol').value = '';
   delete document.getElementById('new-symbol').dataset.fullCode;
@@ -1415,11 +1501,12 @@ async function addHolding() {
 
   if (!rawSym) { toast('请输入代码', 'error'); return; }
   if (isNaN(qty) || qty <= 0) { toast('数量无效', 'error'); return; }
+  if (qty % 100 !== 0) { toast('ETF买入数量必须是100份的整数倍', 'error'); return; }
   if (isNaN(cost) || cost <= 0) { toast('成本价无效', 'error'); return; }
   if (isNaN(cashAfter) || cashAfter < 0) { toast('操作后可用资金无效', 'error'); return; }
   if (!date) { toast('请选择日期', 'error'); return; }
   if (!hasValidReason('new-reason')) {
-    toast('未匹配到当日 AI 操作；如属纠错或补历史，请先显式启用人工补录', 'error');
+    toast('未匹配到当日扫描器操作；如属纠错或补历史，请先显式启用人工补录', 'error');
     return;
   }
 
@@ -1627,7 +1714,7 @@ async function confirmOperationDialog() {
   const idx = parseInt(document.getElementById('operation-index').value);
   const targetEventId = document.getElementById('operation-event-id').value;
   if (!hasValidReason('operation-reason')) {
-    toast('未匹配到当日 AI 操作；如属纠错或补历史，请先显式启用人工补录', 'error');
+    toast('未匹配到当日扫描器操作；如属纠错或补历史，请先显式启用人工补录', 'error');
     return;
   }
   const reason = selectedReason('operation-reason');

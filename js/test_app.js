@@ -45,6 +45,16 @@ assert.equal(parsed.actions[0].code, 'sh588800');
 assert.equal(parsed.actions[1].type, 'ADD');
 assert.equal(parsed.actions[2].type, 'REDUCE');
 
+const scannerActions = context.decisionOperationsToActions([{
+  id: 'OP-09', action: 'BUY', symbol: 'sh588000', name: '科创50ETF',
+  current_target_position_pct: 0, target_position_pct: 10, adjustment_pct: 10,
+  rule_code: 'B_INITIAL_BUY', signal_grade: 'B', reason: '扫描器权威决策',
+  metrics: { score: 78 },
+}]);
+assert.equal(scannerActions[0].authority, 'scanner');
+assert.equal(scannerActions[0].ruleCode, 'B_INITIAL_BUY');
+assert.equal(context.actionToReason(scannerActions[0]).data_confidence, 'scanner_authoritative');
+
 vm.runInContext(`currentAiActions = ${JSON.stringify(parsed.actions)}`, context);
 const buyReasons = context.reasonOptionsFor('588800', ['BUY']);
 assert.equal(buyReasons.length, 1);

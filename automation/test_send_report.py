@@ -10,17 +10,35 @@ class SendReportTests(unittest.TestCase):
     def dashboard(self, text=None, ok=True, error=None):
         text = text or "\n".join(
             [
-                "【执行窗口】",
-                "14:53-15:00 执行，未成交走盘后固定价格。",
-                "【操作清单】",
-                "| 操作编号 | 类型 | 代码 | 名称 | 当前目标仓位% | 今日目标仓位% | 调整仓位 | 规则代码 | 信号等级 | 中文操作依据 | 关键指标 |",
-                "|---|---|---|---|---|---|---|---|---|---|---|",
-                "| OP-01 | BUY | sh588800 | 科创100ETF | 0% | 10% | +10% | B_INITIAL_BUY | B | 普通信号首次建仓 | 评分76 |",
+                "【审计结论】",
+                "PASS",
+                "【发现】",
+                "- 无",
+                "【解释】",
+                "扫描器决策一致。",
             ]
         )
         return {
             "generated_at": "2026-07-09 14:52:00",
-            "methodology_version": "v3.0",
+            "methodology_version": "v3.1",
+            "decision": {
+                "operations": [
+                    {
+                        "id": "OP-01",
+                        "action": "BUY",
+                        "symbol": "sh588800",
+                        "name": "科创100ETF",
+                        "current_target_position_pct": 0,
+                        "target_position_pct": 10,
+                        "adjustment_pct": 10,
+                        "rule_code": "B_INITIAL_BUY",
+                        "signal_grade": "B",
+                        "reason": "普通信号首次建仓",
+                        "metrics": {"score": 76},
+                    }
+                ]
+            },
+            "audit": {"ok": ok, "text": text if ok else "", "error": error},
             "ai": {"ok": ok, "text": text if ok else "", "error": error},
         }
 
@@ -30,7 +48,7 @@ class SendReportTests(unittest.TestCase):
             "2026-07-09",
             self.dashboard(),
         )
-        self.assertIn("v3.0", payload["title"])
+        self.assertIn("v3.1", payload["title"])
         self.assertNotIn("Gemini", payload["title"])
         self.assertIn("OP-01 BUY sh588800", payload["body"])
         self.assertNotIn("扫描报告正文", payload["body"])
@@ -46,13 +64,14 @@ class SendReportTests(unittest.TestCase):
         )
         self.assertLess(len(json_bytes(payload)), 4096)
 
-    def test_ai_failure_sends_short_warning_not_full_report(self):
+    def test_ai_failure_keeps_scanner_operation(self):
         report = "不可进入推送的超长原始报告" * 1000
         payload = send_report.build_payload(
             report,
             dashboard_data=self.dashboard(ok=False, error="DeepSeek HTTP 503"),
         )
-        self.assertIn("AI 分析失败", payload["body"])
+        self.assertIn("OP-01 BUY sh588800", payload["body"])
+        self.assertIn("AI审计不可用", payload["body"])
         self.assertIn("DeepSeek HTTP 503", payload["body"])
         self.assertNotIn(report[:100], payload["body"])
 

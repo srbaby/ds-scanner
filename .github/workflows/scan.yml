@@ -32,10 +32,11 @@ jobs:
       - name: 安装Python依赖
         run: pip install requests pandas akshare lxml beautifulsoup4
 
-      - name: 运行v3.0回归测试
+      - name: 运行v3.1回归测试
         run: |
           node js/test_app.js
           PYTHONPATH=automation python -m unittest \
+            automation/test_ds_scanner.py \
             automation/test_send_report.py \
             automation/test_versioning.py \
             automation/test_observe.py

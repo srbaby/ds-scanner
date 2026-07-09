@@ -49,9 +49,9 @@ const OBSERVE_REPO = 'srbaby/ds-scanner';
 const OBSERVE_WORKFLOW = 'observe.yml';
 const OBSERVE_REF = 'main';
 const DEFAULT_VERSIONS = {
-  methodology_version: 'v3.0',
-  prompt_contract_version: 'v3.0',
-  data_schema_version: 'v2.0',
+  methodology_version: 'v3.1',
+  prompt_contract_version: 'v3.1',
+  data_schema_version: 'v3.0',
 };
 
 // ============================================================
@@ -690,7 +690,7 @@ function actionToReason(action) {
     target_position_before_pct: parseFloat(action.currentTarget) || 0,
     target_position_after_pct: parseFloat(action.target) || 0,
     position_delta_pct: parseFloat(action.delta) || 0,
-    data_confidence: action.actionId ? 'ai_matched' : 'manual',
+    data_confidence: action.authority === 'scanner' ? 'scanner_authoritative' : action.actionId ? 'ai_matched' : 'manual',
   };
 }
 
@@ -792,13 +792,36 @@ function hasValidReason(selectId) {
   return !!select && !select.disabled && !!select.selectedOptions?.[0]?.dataset.reason;
 }
 
+function decisionOperationsToActions(operations) {
+  return (operations || []).map(op => ({
+    actionId: op.id || '',
+    type: normalizeActionType(op.action),
+    code: op.symbol || '',
+    name: op.name || '',
+    currentTarget: String(op.current_target_position_pct ?? 0),
+    target: String(op.target_position_pct ?? 0),
+    delta: String(op.adjustment_pct ?? 0),
+    ruleCode: op.rule_code || '',
+    signalGrade: op.signal_grade || '',
+    reasonZh: op.reason || '',
+    metrics: JSON.stringify(op.metrics || {}),
+    qty: `${op.adjustment_pct > 0 ? '+' : ''}${op.adjustment_pct || 0}%`,
+    note: op.reason || '',
+    authority: 'scanner',
+  }));
+}
+
 function renderQuickGuide(data, aiText) {
   const guide = document.getElementById('quick-guide');
   const body = document.getElementById('quick-guide-body');
   const meta = document.getElementById('quick-guide-meta');
   if (!guide || !body || !meta) return false;
 
-  const parsed = extractQuickGuide(aiText);
+  const scannerOps = data?.decision?.operations || [];
+  const parsed = scannerOps.length ? {
+    windowText: '',
+    actions: decisionOperationsToActions(scannerOps),
+  } : extractQuickGuide(aiText);
 
   if (!parsed) {
     guide.hidden = true;
@@ -839,7 +862,7 @@ function renderQuickGuide(data, aiText) {
 }
 
 // ============================================================
-// AI分析看板（dashboard.json：干货=AI回复全文，原始数据折叠）
+// 扫描器权威决策 + AI非权威审计
 // ============================================================
 function renderDashboard(data) {
   const aiSection = document.getElementById('ai-section');
@@ -864,7 +887,7 @@ function renderDashboard(data) {
     return;
   }
 
-  const ai = data.ai || {};
+  const ai = data.audit || data.ai || {};
   aiMeta.textContent = [data.methodology_version, ai.model]
     .filter(Boolean).join(' · ') || '—';
 
@@ -889,19 +912,22 @@ function renderDashboard(data) {
   aiSection.classList.toggle('is-fresh', !isStale && !!data.generated_at);
   reportSection.classList.toggle('is-fresh', !isStale && !!data.generated_at);
 
+  const hasDecision = !!data?.decision?.operations?.length;
+  const hasQuickGuide = renderQuickGuide(data, (data.ai || {}).text || '');
   if (ai.ok && ai.text) {
-    const hasQuickGuide = renderQuickGuide(data, ai.text);
     aiSection.classList.remove('ai-err');
     aiBody.innerHTML = renderMarkdown(ai.text);
     aiSection.open = !hasQuickGuide;
     reportSection.open = false; // 干货已展示，原始数据默认折叠
   } else {
-    currentAiActions = [];
-    if (quickGuide) quickGuide.hidden = true;
-    aiSection.classList.add('ai-err');
+    if (!hasDecision) {
+      currentAiActions = [];
+      if (quickGuide) quickGuide.hidden = true;
+    }
+    aiSection.classList.toggle('ai-err', !hasDecision);
     aiSection.open = true;
-    aiBody.innerHTML = `<div class="error-box">⚠️ AI分析失败：${escapeHtml(ai.error || '未知错误')}\n\n请展开下方「原始扫描数据」，手动复制给备用AI分析。</div>`;
-    reportSection.open = true; // AI失败兜底：自动展开原始数据
+    aiBody.innerHTML = `<div class="error-box">⚠️ AI审计不可用：${escapeHtml(ai.error || '未知错误')}\n\n扫描器权威操作清单仍然有效。</div>`;
+    reportSection.open = !hasDecision;
   }
 
   reportBody.innerHTML = renderMarkdown(data.report || '(无数据)');

@@ -283,7 +283,41 @@ def extract_fund_flow(text: str) -> str:
 
 
 def parse_ai_decisions(dashboard: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """解析 AI 操作清单表格，供 trades.jsonl 写入结构化依据。"""
+    """优先读取扫描器权威操作；旧数据回退解析 AI 表格。"""
+    scanner_ops = ((dashboard.get("decision") or {}).get("operations") or [])
+    if scanner_ops:
+        methodology_version = str(dashboard.get("methodology_version") or "")
+        decisions = []
+        for op in scanner_ops:
+            action = normalize_decision_action(op.get("action"))
+            symbol = normalize_symbol(op.get("symbol"))
+            if not action or not re.search(r"\d{6}$", symbol):
+                continue
+            metrics = op.get("metrics") or {}
+            decisions.append(
+                {
+                    "methodology_version": methodology_version,
+                    "ai_action_id": op.get("id") or "",
+                    "decision_action": action,
+                    "symbol": symbol,
+                    "name": op.get("name") or "",
+                    "target_position_before_pct": op.get("current_target_position_pct"),
+                    "target_position_after_pct": op.get("target_position_pct"),
+                    "position_delta_pct": op.get("adjustment_pct"),
+                    "rule_code": op.get("rule_code") or "",
+                    "signal_grade": op.get("signal_grade") or "",
+                    "signal_basis": op.get("reason") or "",
+                    "reason_zh": op.get("reason") or "",
+                    "score": metrics.get("score"),
+                    "vol_ratio": metrics.get("vol_ratio"),
+                    "ma20_deviation_pct": metrics.get("ma20_deviation_pct"),
+                    "relative_hs300_strength_pct": metrics.get("relative_hs300_strength_pct"),
+                    "fund_flow": metrics.get("fund_flow") or "",
+                    "decision_authority": "scanner",
+                }
+            )
+        return decisions
+
     ai_text = str((dashboard.get("ai") or {}).get("text") or "")
     methodology_version = str(dashboard.get("methodology_version") or "")
     decisions: List[Dict[str, Any]] = []
@@ -618,7 +652,7 @@ def infer_trade_reason(action: str, symbol: str, dashboard: Dict[str, Any]) -> s
             if symbol in line:
                 if re.search(r"止损|清仓|卖出|止盈|减仓|买入|加仓", line):
                     return line.strip()[:120]
-    return "AI操作清单/持仓变更推导" if action in {"BUY", "ADD", "SELL"} else "自动观察"
+    return "扫描器操作清单/持仓变更推导" if action in {"BUY", "ADD", "SELL"} else "自动观察"
 
 
 def estimate_total_position_pct(
@@ -720,7 +754,13 @@ def build_trade(
         row["needs_review"] = True
     if decision.get("execution_event_id"):
         row["source"] = "execution_event"
-        row["confidence"] = "high" if decision.get("data_confidence") == "ai_matched" else "medium"
+        row["confidence"] = (
+            "high"
+            if decision.get("data_confidence")
+            in {"ai_matched", "scanner_authoritative"}
+            or decision.get("decision_authority") == "scanner"
+            else "medium"
+        )
     if action == "SELL" and open_cost is not None and price is not None:
         gross = (price - open_cost) * qty
         row["pnl_amount"] = round(gross - row["commission"], 2)

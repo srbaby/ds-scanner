@@ -51,6 +51,7 @@ GIST_ID = os.environ.get("DS_SCANNER_GIST_ID", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 DASHBOARD_FILE = "dashboard.json"
+DECISION_FILE = "decision.json"
 
 
 def _gist_headers():
@@ -96,9 +97,11 @@ def main():
     validate_document_versions()
     with open("report.txt", "r", encoding="utf-8") as f:
         report_text = f.read()
+    with open(DECISION_FILE, "r", encoding="utf-8") as f:
+        decision = json.load(f)
 
-    print(f"🤖 调用 DeepSeek ({DEEPSEEK_MODEL}) 分析中...")
-    result = call_deepseek(report_text)
+    print(f"🤖 调用 DeepSeek ({DEEPSEEK_MODEL}) 审计中...")
+    result = call_deepseek(report_text, decision)
     if result["ok"]:
         print("✅ DeepSeek 分析完成")
     else:
@@ -110,6 +113,15 @@ def main():
         "prompt_contract_version": PROMPT_CONTRACT_VERSION,
         "data_schema_version": DATA_SCHEMA_VERSION,
         "report": report_text,
+        "decision": decision,
+        "audit": {
+            "provider": "deepseek",
+            "model": result["model"],
+            "ok": result["ok"],
+            "text": result["text"],
+            "error": result["error"],
+        },
+        # 兼容旧版前端；新链路只从 decision 读取交易操作。
         "ai": {
             "provider": "deepseek",
             "model": result["model"],

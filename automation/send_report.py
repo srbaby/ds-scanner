@@ -87,15 +87,36 @@ def parse_action_rows(ai_text):
     return rows
 
 
+def decision_action_rows(dashboard_data):
+    rows = []
+    for op in ((dashboard_data.get("decision") or {}).get("operations") or []):
+        rows.append(
+            {
+                "id": op.get("id") or "",
+                "action": str(op.get("action") or "").upper(),
+                "code": op.get("symbol") or "",
+                "name": op.get("name") or "",
+                "current": f"{op.get('current_target_position_pct', 0)}%",
+                "target": f"{op.get('target_position_pct', 0)}%",
+                "rule": op.get("rule_code") or "",
+                "reason": op.get("reason") or "",
+            }
+        )
+    return rows
+
+
 def build_bark_body(report_text, dashboard_data=None):
     dashboard_data = dashboard_data or {}
+    decision = dashboard_data.get("decision") or {}
+    audit = dashboard_data.get("audit") or dashboard_data.get("ai") or {}
     ai = dashboard_data.get("ai") or {}
     generated_at = dashboard_data.get("generated_at") or ""
     version = dashboard_data.get("methodology_version") or METHODOLOGY_VERSION
     lines = [f"{version} · {generated_at or '本次扫描'}"]
 
-    if ai.get("ok") and ai.get("text"):
-        ai_text = ai["text"]
+    rows = decision_action_rows(dashboard_data)
+    if rows:
+        ai_text = ai.get("text") or ""
         window_lines = [
             line for line in get_section(ai_text, "执行窗口")
             if "|" not in line and not line.startswith("类型")
@@ -103,7 +124,6 @@ def build_bark_body(report_text, dashboard_data=None):
         if window_lines:
             lines.extend(["", "执行窗口", window_lines[0]])
 
-        rows = parse_action_rows(ai_text)
         transaction_rows = [row for row in rows if row["action"] in TRANSACTION_ACTIONS]
         lines.extend(["", "操作清单"])
         if transaction_rows:
@@ -119,7 +139,8 @@ def build_bark_body(report_text, dashboard_data=None):
             lines.append("今日无 BUY / ADD / REDUCE / SELL 操作")
 
         warnings = []
-        for line in ai_text.splitlines():
+        audit_text = audit.get("text") or ""
+        for line in audit_text.splitlines():
             stripped = line.strip().lstrip("-* ")
             if (
                 stripped
@@ -131,13 +152,30 @@ def build_bark_body(report_text, dashboard_data=None):
                 break
         if warnings:
             lines.extend(["", "异常与降级", *warnings])
+        if audit.get("ok"):
+            status = next(
+                (value for value in ("CONFLICT", "WARN", "PASS") if value in audit_text),
+                "PASS",
+            )
+            lines.extend(["", f"AI审计：{status}"])
+        else:
+            lines.extend(["", f"AI审计不可用：{audit.get('error') or '未知错误'}"])
+    elif ai.get("ok") and ai.get("text"):
+        # 旧版 dashboard.json 兼容。
+        rows = parse_action_rows(ai["text"])
+        transaction_rows = [row for row in rows if row["action"] in TRANSACTION_ACTIONS]
+        lines.extend(["", "操作清单"])
+        for row in transaction_rows:
+            lines.append(
+                f"{row['id']} {row['action']} {row['code']} {row['current']}→{row['target']} {row['rule']}"
+            )
     else:
-        error = ai.get("error") or "未生成可用 AI 操作清单"
+        error = "未生成扫描器权威操作清单"
         lines.extend([
             "",
-            "⚠️ AI 分析失败",
+            "⚠️ 决策生成失败",
             str(error),
-            "原始扫描与完整错误已保留在看板，请勿依据缺失清单执行交易。",
+            "请勿依据缺失清单执行交易。",
         ])
 
     lines.extend(["", f"完整报告：{DASHBOARD_URL}"])

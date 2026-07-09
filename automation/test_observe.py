@@ -73,17 +73,31 @@ class ObserveTests(unittest.TestCase):
         )
         files["dashboard.json"] = j(
             {
-                "methodology_version": "v3.0",
-                "ai": {
-                    "text": "\n".join(
-                        [
-                            "【操作清单】",
-                            "| 操作编号 | 类型 | 代码 | 名称 | 当前目标仓位% | 今日目标仓位% | 调整仓位 | 规则代码 | 信号等级 | 中文操作依据 | 关键指标 |",
-                            "|---|---|---|---|---:|---:|---:|---|---|---|---|",
-                            "| OP-01 | BUY | sh588800 | 科创100ETF | 0% | 10% | +10% | B_INITIAL_BUY | B | 普通信号首次建仓至10% | 评分:76 量比:1.30 MA20偏离:+2.5% 资金流:💰流入 超额沪深300:+1.2% |",
-                        ]
-                    )
+                "methodology_version": "v3.1",
+                "decision": {
+                    "operations": [
+                        {
+                            "id": "OP-01",
+                            "action": "BUY",
+                            "symbol": "sh588800",
+                            "name": "科创100ETF",
+                            "current_target_position_pct": 0,
+                            "target_position_pct": 10,
+                            "adjustment_pct": 10,
+                            "rule_code": "B_INITIAL_BUY",
+                            "signal_grade": "B",
+                            "reason": "普通信号首次建仓至10%",
+                            "metrics": {
+                                "score": 76,
+                                "vol_ratio": 1.3,
+                                "ma20_deviation_pct": 2.5,
+                                "fund_flow": "💰流入",
+                                "relative_hs300_strength_pct": 1.2,
+                            },
+                        }
+                    ]
                 },
+                "ai": {"text": "【审计结论】\nPASS"},
             }
         )
 
@@ -92,7 +106,7 @@ class ObserveTests(unittest.TestCase):
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades[0]["action"], "BUY")
         self.assertEqual(trades[0]["confidence"], "high")
-        self.assertEqual(trades[0]["methodology_version"], "v3.0")
+        self.assertEqual(trades[0]["methodology_version"], "v3.1")
         self.assertEqual(trades[0]["rule_code"], "B_INITIAL_BUY")
         self.assertEqual(trades[0]["entry_rule_code"], "B_INITIAL_BUY")
         self.assertEqual(trades[0]["signal_grade"], "B")

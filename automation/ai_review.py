@@ -27,6 +27,7 @@ X-Plan AI自动复核模块（DeepSeek Flash）
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
+import json
 import os
 import time
 from typing import Dict, Optional
@@ -49,44 +50,15 @@ PROMPT_FILE = os.path.join(
 )
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
-REQUIRED_OPERATION_COLUMNS = [
-    "操作编号",
-    "类型",
-    "代码",
-    "名称",
-    "当前目标仓位%",
-    "今日目标仓位%",
-    "调整仓位",
-    "规则代码",
-    "信号等级",
-    "中文操作依据",
-    "关键指标",
-]
-
-
 def validate_ai_output(text: str) -> Optional[str]:
-    if "【操作清单】" not in text:
-        return "缺少【操作清单】"
-    header = next(
-        (line for line in text.splitlines() if "|" in line and "操作编号" in line and "规则代码" in line),
-        "",
-    )
-    missing = [column for column in REQUIRED_OPERATION_COLUMNS if column not in header]
-    if missing:
-        return f"操作清单缺少列: {', '.join(missing)}"
-    transaction_rows = []
-    for line in text.splitlines():
-        if "|" not in line or not any(f"| {action} |" in line for action in ["BUY", "ADD", "REDUCE", "SELL"]):
-            continue
-        cols = [part.strip() for part in line.strip().strip("|").split("|")]
-        if len(cols) < len(REQUIRED_OPERATION_COLUMNS):
-            return f"操作行字段不足: {line[:120]}"
-        transaction_rows.append(cols)
-    for cols in transaction_rows:
-        if not cols[0].upper().startswith("OP-"):
-            return f"操作编号无效: {cols[0]}"
-        if not cols[7] or not cols[9]:
-            return f"规则代码或中文操作依据为空: {cols[0]}"
+    if "【审计结论】" not in text:
+        return "缺少【审计结论】"
+    if not any(status in text for status in ("PASS", "WARN", "CONFLICT")):
+        return "审计结论必须是 PASS/WARN/CONFLICT"
+    if "【发现】" not in text or "【解释】" not in text:
+        return "缺少【发现】或【解释】"
+    if "【操作清单】" in text:
+        return "AI审计不得生成操作清单"
     return None
 
 
@@ -100,7 +72,7 @@ def load_prompt() -> Optional[str]:
         return None
 
 
-def call_deepseek(report_text: str) -> Dict:
+def call_deepseek(report_text: str, decision: Optional[Dict] = None) -> Dict:
     """
     调用 DeepSeek API 做四维评分分析。
 
@@ -131,19 +103,21 @@ def call_deepseek(report_text: str) -> Dict:
         }
 
     system_instruction = (
-        "你是 X-Plan 的每日AI复核员。\n"
-        "下面是本系统的每日AI Core Prompt，这是本次自动复核的唯一执行规则，"
-        "请严格按Prompt输出分析，不要引入文档之外的规则或个人经验判断。\n"
-        "如果报告处于非尾盘时段（报告顶部会标注数据时效），请明确提示当前数据是否可用于"
-        "尾盘决策，不要把盘中折算量比当作尾盘真实值使用。\n\n"
+        "你是 X-Plan 的独立审计员。扫描器是唯一决策源。"
+        "你只能复核数学、规则一致性和数据异常，不得重新评分、改等级、改仓位或另造操作清单。\n\n"
         f"{prompt}"
     )
+    user_content = report_text
+    if decision:
+        user_content += "\n\n【扫描器结构化权威决策】\n" + json.dumps(
+            decision, ensure_ascii=False
+        )
 
     payload = {
         "model": DEEPSEEK_MODEL,
         "messages": [
             {"role": "system", "content": system_instruction},
-            {"role": "user", "content": report_text},
+            {"role": "user", "content": user_content},
         ],
         "max_tokens": DEEPSEEK_MAX_TOKENS,
         "stream": False,

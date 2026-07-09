@@ -13,7 +13,7 @@
 """
 X-Plan 波段验证系统 - 尾盘扫描器 v3.1
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-核心升级 v3.1（v3.0方法论落地）:
+核心升级 v3.2（v3.1确定性决策落地）:
   - ⭐ [新增] 扫描报告补充账户总市值、总权益仓位、单品当前仓位、MA20偏离、相对沪深300强度。
   - ⭐ [调整] 持仓管理卡只提供风险/趋势提示，不再强制“盈利到线即减仓”。
   - ⭐ [调整] 报告任务改为每日一次目标仓位重估，兼容 DeepSeek / Gemini。
@@ -23,7 +23,7 @@ X-Plan 波段验证系统 - 尾盘扫描器 v3.1
   - ⭐ 引入三道防线：逻辑止损（政策分<15）、价格止损（-8%）、时间止损（T+21）。
 
 运行时间: 每日14:30（量比以14:55尾盘为准）
-输出格式: 原始数据（不含评分），AI基于v3.0框架输出目标仓位
+输出格式: 原始数据 + 四维评分 + 扫描器权威操作，AI仅做独立审计
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -40,9 +40,13 @@ from versioning import METHODOLOGY_VERSION, validate_document_versions
 # ============================================================
 # 系统全局常量
 # ============================================================
-SYSTEM_VERSION = "3.1"
+SYSTEM_VERSION = "3.2"
 SYSTEM_NAME = "X-Plan 波段验证系统"
 METHODOLOGY_DESC = f"{METHODOLOGY_VERSION} 右轮目标仓位"
+DECISION_FILE = "decision.json"
+TARGET_TIERS = (0, 10, 15, 20)
+MAX_SINGLE_POSITION_PCT = 20
+MAX_EQUITY_POSITION_PCT = 65
 
 os.environ["TZ"] = "Asia/Shanghai"
 if hasattr(time, "tzset"):
@@ -437,6 +441,145 @@ def calculate_rsi(df: pd.DataFrame, period: int = 14) -> float:
     rsi = 100 - (100 / (1 + ma_up / ma_down))
 
     return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
+
+
+def completed_history(history: Optional[pd.DataFrame], today=None) -> Optional[pd.DataFrame]:
+    """仅保留已完成交易日，避免盘中未完成K线污染MA20/ATR。"""
+    if history is None or history.empty:
+        return None
+    out = history.copy()
+    if "date" not in out.columns:
+        return out
+    today = today or datetime.now().date()
+    dates = pd.to_datetime(out["date"], errors="coerce").dt.date
+    out = out.loc[dates < today].copy()
+    return out if not out.empty else None
+
+
+def calculate_atr(history: pd.DataFrame, period: int = 14) -> float:
+    if history is None or len(history) < period + 1:
+        return 0.0
+    prev_close = history["close"].shift(1)
+    true_range = pd.concat(
+        [
+            history["high"] - history["low"],
+            (history["high"] - prev_close).abs(),
+            (history["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = true_range.tail(period).mean()
+    return float(atr) if pd.notna(atr) and atr > 0 else 0.0
+
+
+def _score_technical(price, ma20, deviation, vol_ratio, fund_flow, rsi) -> int:
+    if price <= ma20:
+        trend = 0
+    elif deviation <= 5:
+        trend = 10
+    elif deviation <= 12:
+        trend = 8
+    elif deviation <= 15:
+        trend = 5
+    elif deviation <= 20:
+        trend = 2
+    else:
+        trend = 0
+    volume = 6 if vol_ratio >= 1.5 else 5 if vol_ratio >= 1.26 else 4 if vol_ratio >= 1.2 else 2 if vol_ratio >= 1 else 0
+    flow = 5 if "流入" in fund_flow else 0 if "流出" in fund_flow else 3
+    rsi_score = 4 if 50 <= rsi <= 70 else 2 if 40 <= rsi < 50 or 70 < rsi <= 75 else 1 if 30 <= rsi < 40 else 0
+    return trend + volume + flow + rsi_score
+
+
+def _score_sentiment(change_pct, relative_strength, vol_ratio, rsi) -> int:
+    strength = 10 if relative_strength >= 2 else 8 if relative_strength >= 1.5 else 6 if relative_strength >= 1 else 4 if relative_strength >= 0 else 2 if relative_strength >= -0.5 else 0
+    if change_pct > 1 and vol_ratio >= 1.2:
+        momentum = 6
+    elif change_pct > 0 and vol_ratio >= 1:
+        momentum = 4
+    elif change_pct > 0:
+        momentum = 3
+    elif change_pct >= -1 and vol_ratio <= 1.2:
+        momentum = 1
+    else:
+        momentum = 0
+    crowding = 4 if 45 <= rsi <= 65 else 2 if 35 <= rsi < 45 or 65 < rsi <= 75 else 0
+    return strength + momentum + crowding
+
+
+def _score_risk_reward(price, ma20, atr, high_20) -> Tuple[int, float, float, float]:
+    if min(price, ma20, atr, high_20) <= 0:
+        return 0, 0.0, 0.0, 0.0
+    stop_price = max(ma20 - 0.5 * atr, price - 2 * atr, price * 0.92)
+    if stop_price >= price:
+        stop_price = price - atr
+    risk = max(price - stop_price, atr)
+    target_price = max(high_20, price) + 2 * atr
+    ratio = (target_price - price) / risk if risk > 0 else 0.0
+    score = 25 if ratio > 3 else 20 if ratio >= 2 else 14 if ratio >= 1.5 else 8
+    return score, ratio, stop_price, target_price
+
+
+def calculate_four_dimensional_score(
+    base_score: float,
+    price: float,
+    ma20: float,
+    deviation: float,
+    vol_ratio: float,
+    fund_flow: str,
+    rsi: float,
+    change_pct: float,
+    relative_strength: float,
+    atr: float,
+    high_20: float,
+) -> Dict:
+    policy = max(0, min(30, round(float(base_score) * 2)))
+    technical = _score_technical(price, ma20, deviation, vol_ratio, fund_flow, rsi)
+    sentiment = _score_sentiment(change_pct, relative_strength, vol_ratio, rsi)
+    risk_reward, ratio, stop_price, target_price = _score_risk_reward(price, ma20, atr, high_20)
+    return {
+        "policy_catalyst": policy,
+        "technical": technical,
+        "sentiment_strength": sentiment,
+        "risk_reward": risk_reward,
+        "total": policy + technical + sentiment + risk_reward,
+        "risk_reward_ratio": round(ratio, 2),
+        "atr14": round(atr, 4),
+        "stop_price": round(stop_price, 4),
+        "target_price": round(target_price, 4),
+    }
+
+
+def determine_signal_grade(etf: Dict) -> str:
+    if not etf.get("data_quality", {}).get("valid"):
+        return "无效"
+    score = etf["score"]["total"]
+    common = etf["price"] > etf["ma20"] and etf["ma20_deviation_pct"] <= 15
+    if (
+        score >= 85
+        and common
+        and etf["ma20_deviation_pct"] <= 12
+        and etf["vol_ratio"] >= 1.26
+        and "流入" in etf["fund_flow"]
+        and etf["relative_strength_pct"] >= 1.5
+        and etf["rsi"] <= 75
+    ):
+        return "S"
+    if (
+        score >= 80
+        and common
+        and etf["vol_ratio"] >= 1.26
+        and ("流入" in etf["fund_flow"] or etf["relative_strength_pct"] >= 1.0)
+    ):
+        return "A"
+    if (
+        score >= 75
+        and common
+        and etf["vol_ratio"] >= 1.2
+        and "流出" not in etf["fund_flow"]
+    ):
+        return "B"
+    return "无效"
 
 
 def fetch_index_sina() -> Dict:
@@ -1021,7 +1164,13 @@ def calc_volume_time_factor() -> float:
     return min(total_minutes / max(elapsed, 1), 8.0)
 
 
-def scan_etf_pool(etf_pool: Dict, holding_symbols: set, realtime: Dict):
+def scan_etf_pool(
+    etf_pool: Dict,
+    holding_symbols: set,
+    realtime: Dict,
+    base_scores: Dict = None,
+    index_change: float = 0.0,
+):
     print("⏳ 正在扫描ETF观察池...")
     etf_list = []
 
@@ -1029,16 +1178,41 @@ def scan_etf_pool(etf_pool: Dict, holding_symbols: set, realtime: Dict):
         if code not in realtime:
             continue
         rt = realtime[code]
-        history = fetch_sina_history(code, 30)
+        history = completed_history(fetch_sina_history(code, 45))
+        quality_issues = []
         if history is None or len(history) < 20:
-            continue
+            quality_issues.append("INSUFFICIENT_HISTORY")
+            history = history if history is not None else pd.DataFrame()
 
-        last = history.iloc[-1]
-        rsi = calculate_rsi(history, 14)
-        ma20 = last["ma20"] if pd.notna(last["ma20"]) else rt["price"]
+        if len(history) >= 20:
+            ma20 = float(history["close"].tail(20).mean())
+            rsi = calculate_rsi(history, 14)
+            atr = calculate_atr(history, 14)
+            high_20 = float(history["high"].tail(20).max())
+            history_last_close = float(history.iloc[-1]["close"])
+        else:
+            ma20 = rt["price"]
+            rsi = 50.0
+            atr = 0.0
+            high_20 = rt["price"]
+            history_last_close = 0.0
+
+        realtime_last_close = float(rt.get("last_close") or 0)
+        close_gap_pct = (
+            abs(history_last_close / realtime_last_close - 1) * 100
+            if history_last_close > 0 and realtime_last_close > 0
+            else 0.0
+        )
+        if close_gap_pct > 3:
+            quality_issues.append("HISTORY_REALTIME_CLOSE_MISMATCH")
+        if atr <= 0:
+            quality_issues.append("INVALID_ATR")
+
         ma20_deviation_pct = ((rt["price"] / ma20 - 1) * 100) if ma20 > 0 else 0.0
+        if ma20 <= 0 or abs(ma20_deviation_pct) > 30:
+            quality_issues.append("ABNORMAL_MA20_DEVIATION")
         vol_ma5 = (
-            last["vol_ma5"] if pd.notna(last["vol_ma5"]) and last["vol_ma5"] > 0 else 1
+            float(history["volume"].tail(5).mean()) if len(history) >= 5 else 1
         )
         vol_ratio = (
             rt["volume"] * calc_volume_time_factor() / vol_ma5 if vol_ma5 > 0 else 1.0
@@ -1052,27 +1226,274 @@ def scan_etf_pool(etf_pool: Dict, holding_symbols: set, realtime: Dict):
             fund_flow = "➖平衡"
 
         position = "✅持仓" if code in holding_symbols else "⭕无"
-
-        etf_list.append(
-            {
-                "symbol": code.replace("sh", "").replace("sz", ""),
-                "name": pool_info["name"],
-                "category": pool_info["category"],
-                "policy": pool_info["policy"],
-                "price": rt["price"],
-                "change_pct": rt["change_pct"],
-                "vol_ratio": vol_ratio,
-                "rsi": rsi,
-                "ma20": ma20,
-                "ma20_deviation_pct": ma20_deviation_pct,
-                "fund_flow": fund_flow,
-                "position": position,
-            }
+        relative_strength = rt["change_pct"] - index_change
+        configured_base = (
+            (base_scores or {}).get(pool_info.get("category"))
+            or (pool_info.get("_breakdown") or {}).get("base")
+            or 0
         )
+        score = calculate_four_dimensional_score(
+            configured_base,
+            rt["price"],
+            ma20,
+            ma20_deviation_pct,
+            vol_ratio,
+            fund_flow,
+            rsi,
+            rt["change_pct"],
+            relative_strength,
+            atr,
+            high_20,
+        )
+
+        item = {
+            "symbol": code.replace("sh", "").replace("sz", ""),
+            "full_symbol": code,
+            "name": pool_info["name"],
+            "category": pool_info["category"],
+            "policy": pool_info["policy"],
+            "base_score": configured_base,
+            "price": rt["price"],
+            "change_pct": rt["change_pct"],
+            "vol_ratio": vol_ratio,
+            "rsi": rsi,
+            "ma20": ma20,
+            "ma20_deviation_pct": ma20_deviation_pct,
+            "relative_strength_pct": relative_strength,
+            "fund_flow": fund_flow,
+            "position": position,
+            "score": score,
+            "data_quality": {
+                "valid": not quality_issues,
+                "issues": quality_issues,
+                "history_realtime_close_gap_pct": round(close_gap_pct, 2),
+            },
+        }
+        item["signal_grade"] = determine_signal_grade(item)
+        etf_list.append(item)
         print(".", end="", flush=True)
 
     print(" 完成!")
     return etf_list
+
+
+def _nearest_target_tier(position_pct: float) -> int:
+    return min(TARGET_TIERS, key=lambda value: abs(value - position_pct))
+
+
+def _grade_rank(grade: str) -> int:
+    return {"S": 3, "A": 2, "B": 1}.get(grade, 0)
+
+
+def _operation_action(current_pct: float, target_pct: float, holding: bool) -> str:
+    if target_pct == 0 and holding:
+        return "SELL"
+    if target_pct - current_pct >= 2:
+        return "ADD" if holding else "BUY"
+    if current_pct - target_pct >= 2:
+        return "REDUCE"
+    return "HOLD" if holding else "SKIP"
+
+
+def build_authoritative_decision(
+    etf_list: List[Dict],
+    holdings_data: List[Dict],
+    total_value: float,
+    cash_available: float,
+) -> Dict:
+    """由扫描器生成唯一权威信号与操作清单。"""
+    total_asset = total_value + cash_available
+    equity_ratio = total_value / total_asset * 100 if total_asset > 0 else 0.0
+    holding_map = {str(row["symbol"]): row for row in holdings_data}
+    signal_map = {str(row["symbol"]): row for row in etf_list}
+    proposals = []
+
+    for symbol, holding in holding_map.items():
+        etf = signal_map.get(symbol)
+        actual_pct = holding["value"] / total_asset * 100 if total_asset > 0 else 0.0
+        current_tier = _nearest_target_tier(actual_pct)
+        target = current_tier
+        grade = etf.get("signal_grade", "无效") if etf else "无效"
+        score = (etf.get("score") or {}).get("total", 0) if etf else 0
+        rule = "HOLD_TARGET"
+        reason = "趋势与风控未触发调整，维持当前目标仓位"
+
+        if holding.get("profit_pct", 0) <= HARD_STOP_LOSS or holding.get("policy_score") is not None and holding["policy_score"] < POLICY_LOGIC_STOP_THRESHOLD:
+            target, rule, reason = 0, "RISK_STOP", "触发硬止损或基础逻辑分跌破15"
+        elif not etf or not etf.get("data_quality", {}).get("valid"):
+            rule, reason = "WATCH_DATA_GAP", "行情数据校验失败，禁止基于异常数据调整持仓"
+        elif score < 60 or (etf["price"] < etf["ma20"] and "流出" in etf["fund_flow"]):
+            target, rule, reason = 0, "TREND_BREAK", "四维评分跌破60或跌破MA20且资金流出"
+        elif holding.get("days", 0) >= 21 and grade not in {"A", "S"}:
+            target, rule, reason = 0, "TIME_FAIL", "持仓已满21天且今日未达到A/S"
+        elif grade in {"B", "A", "S"}:
+            target = {"B": 10, "A": 15, "S": 20}[grade]
+            if target < current_tier:
+                rule, reason = "SIGNAL_DOWNGRADE", f"今日信号降为{grade}，目标仓位同步降档"
+            elif target > current_tier:
+                rule = "S_CONFIRM_ADD" if grade == "S" else "A_CONFIRM_ADD" if grade == "A" else "B_INITIAL_BUY"
+                reason = f"{grade}级信号确认，目标仓位升至{target}%"
+        elif holding.get("profit_pct", 0) >= 5 and (score < 75 or "流出" in etf["fund_flow"]):
+            index = TARGET_TIERS.index(current_tier)
+            target = TARGET_TIERS[max(0, index - 1)]
+            rule, reason = "PROFIT_WEAKEN", "已有浮盈但评分或资金转弱，目标仓位降一档"
+        elif etf["ma20_deviation_pct"] > 15:
+            rule, reason = "OVERHEAT_HOLD", "趋势未破但MA20偏离过热，维持不加仓"
+
+        if equity_ratio > MAX_EQUITY_POSITION_PCT and target > current_tier:
+            target, rule, reason = current_tier, "HOLD_TARGET", "总权益仓位已超过65%，禁止新增或加仓"
+        proposals.append(
+            {
+                "symbol": etf.get("full_symbol") if etf else symbol,
+                "name": holding.get("name") or (etf or {}).get("name", ""),
+                "holding": True,
+                "current_position_pct": round(actual_pct, 1),
+                "current_target_position_pct": current_tier,
+                "target_position_pct": target,
+                "rule_code": rule,
+                "signal_grade": grade,
+                "reason": reason,
+                "score": score,
+                "etf": etf,
+            }
+        )
+
+    used_target = sum(row["target_position_pct"] for row in proposals)
+    candidates = sorted(
+        [
+            row
+            for row in etf_list
+            if row["symbol"] not in holding_map and row["signal_grade"] in {"B", "A", "S"}
+        ],
+        key=lambda row: (
+            _grade_rank(row["signal_grade"]),
+            row["score"]["total"],
+            row["relative_strength_pct"],
+            row["vol_ratio"],
+        ),
+        reverse=True,
+    )
+    for etf in candidates:
+        grade = etf["signal_grade"]
+        target = {"B": 10, "A": 15, "S": 20}[grade]
+        rule = {"B": "B_INITIAL_BUY", "A": "A_INITIAL_BUY", "S": "S_INITIAL_BUY"}[grade]
+        reason = f"{grade}级信号首次建仓至{target}%"
+        if equity_ratio > MAX_EQUITY_POSITION_PCT:
+            target, rule, reason = 0, "SKIP_NO_SIGNAL", "总权益仓位超过65%，禁止新开仓"
+        elif used_target + target > MAX_EQUITY_POSITION_PCT:
+            weakest = min(
+                [
+                    row
+                    for row in proposals
+                    if row["target_position_pct"] > 0
+                    and row["rule_code"] not in {"WATCH_DATA_GAP", "RISK_STOP"}
+                    and row.get("etf")
+                ],
+                key=lambda row: (
+                    _grade_rank(row["signal_grade"]),
+                    row["score"],
+                ),
+                default=None,
+            )
+            can_switch = (
+                weakest is not None
+                and grade in {"A", "S"}
+                and (
+                    _grade_rank(grade) > _grade_rank(weakest["signal_grade"])
+                    or etf["score"]["total"] - weakest["score"] >= 8
+                )
+                and used_target - weakest["target_position_pct"] + target <= MAX_EQUITY_POSITION_PCT
+            )
+            if can_switch:
+                used_target -= weakest["target_position_pct"]
+                weakest["target_position_pct"] = 0
+                weakest["rule_code"] = "SWITCH_OUT"
+                weakest["reason"] = f"让位于更强的{etf['full_symbol']} {etf['name']}"
+            else:
+                target, rule, reason = 0, "SKIP_NO_SIGNAL", "组合目标仓位不足，横向排序后跳过"
+        if target:
+            used_target += target
+        proposals.append(
+            {
+                "symbol": etf["full_symbol"],
+                "name": etf["name"],
+                "holding": False,
+                "current_position_pct": 0.0,
+                "current_target_position_pct": 0,
+                "target_position_pct": target,
+                "rule_code": rule,
+                "signal_grade": grade,
+                "reason": reason,
+                "score": etf["score"]["total"],
+                "etf": etf,
+            }
+        )
+
+    operations = []
+    for row in proposals:
+        action = _operation_action(
+            row["current_position_pct"], row["target_position_pct"], row["holding"]
+        )
+        if not row["holding"] and row["target_position_pct"] == 0:
+            continue
+        etf = row.get("etf") or {}
+        operations.append(
+            {
+                "id": f"OP-{len(operations) + 1:02d}",
+                "action": action,
+                "symbol": row["symbol"],
+                "name": row["name"],
+                "current_target_position_pct": row["current_target_position_pct"],
+                "target_position_pct": row["target_position_pct"],
+                "adjustment_pct": row["target_position_pct"] - row["current_target_position_pct"],
+                "rule_code": row["rule_code"],
+                "signal_grade": row["signal_grade"],
+                "reason": row["reason"],
+                "metrics": {
+                    "score": row["score"],
+                    "vol_ratio": round(etf.get("vol_ratio", 0), 2),
+                    "ma20_deviation_pct": round(etf.get("ma20_deviation_pct", 0), 2),
+                    "relative_hs300_strength_pct": round(etf.get("relative_strength_pct", 0), 2),
+                    "fund_flow": etf.get("fund_flow", ""),
+                },
+            }
+        )
+    if not any(row["action"] in {"BUY", "ADD", "REDUCE", "SELL"} for row in operations):
+        operations.append(
+            {
+                "id": f"OP-{len(operations) + 1:02d}",
+                "action": "SKIP",
+                "symbol": "-",
+                "name": "-",
+                "current_target_position_pct": 0,
+                "target_position_pct": 0,
+                "adjustment_pct": 0,
+                "rule_code": "SKIP_NO_SIGNAL",
+                "signal_grade": "无效",
+                "reason": "今日没有需要执行的仓位调整",
+                "metrics": {},
+            }
+        )
+
+    return {
+        "schema_version": "v3.0",
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "authority": "scanner",
+        "signals": etf_list,
+        "operations": operations,
+        "portfolio": {
+            "total_asset": round(total_asset, 2),
+            "current_equity_position_pct": round(equity_ratio, 1),
+            "target_equity_position_pct": round(
+                sum(row["target_position_pct"] for row in proposals), 1
+            ),
+            "max_equity_position_pct": MAX_EQUITY_POSITION_PCT,
+        },
+        "data_quality": {
+            "valid_count": sum(1 for row in etf_list if row["data_quality"]["valid"]),
+            "invalid_count": sum(1 for row in etf_list if not row["data_quality"]["valid"]),
+        },
+    }
 
 
 # ============================================================
@@ -1081,9 +1502,15 @@ def scan_etf_pool(etf_pool: Dict, holding_symbols: set, realtime: Dict):
 
 
 def generate_report_v2(
-    market, etf_list, holdings_data, wave_cards, total_value, cash_available
+    market,
+    etf_list,
+    holdings_data,
+    wave_cards,
+    total_value,
+    cash_available,
+    decision=None,
 ):
-    """生成 v3.1 格式报告：服务 v3.0 每日目标仓位重估。"""
+    """生成 v3.2 格式报告：服务 v3.1 确定性目标仓位重估。"""
     report = []
     day_num = (datetime.now() - datetime(2026, 2, 4)).days + 1
     total_asset = total_value + cash_available
@@ -1178,17 +1605,17 @@ def generate_report_v2(
 
     report.append("\n## 📊 扫描数据（原始数据）\n")
     report.append(
-        "| 代码 | 名称 | 现价 | 涨跌% | 量比 | RSI | MA20 | MA20偏离% | 超额沪深300% | 资金流向 | 基础逻辑分 | 当前仓位% | 持仓 |"
+        "| 代码 | 名称 | 现价 | 涨跌% | 量比 | RSI | MA20 | MA20偏离% | 超额沪深300% | 资金流向 | 基础逻辑分 | 四维评分 | 信号 | 数据质量 | 当前仓位% | 持仓 |"
     )
     report.append(
-        "|------|------|------|-------|------|-----|------|-----------|--------------|----------|------------|----------|------|"
+        "|------|------|------|-------|------|-----|------|-----------|--------------|----------|------------|----------|------|----------|----------|------|"
     )
     for etf in etf_list:
         change_emoji = "🔴" if etf["change_pct"] < 0 else "🟢"
         excess_pct = etf["change_pct"] - index_change_pct
         current_position_pct = holding_position_pct.get(etf["symbol"], 0.0)
         report.append(
-            f"| {etf['symbol']} | {etf['name']} | {etf['price']:.3f} | {change_emoji}{etf['change_pct']:+.2f}% | {etf['vol_ratio']:.2f} | {etf['rsi']:.0f} | {etf['ma20']:.3f} | {etf['ma20_deviation_pct']:+.2f}% | {excess_pct:+.2f}% | {etf['fund_flow']} | {etf['policy']} | {current_position_pct:.1f}% | {etf['position']} |"
+            f"| {etf['symbol']} | {etf['name']} | {etf['price']:.3f} | {change_emoji}{etf['change_pct']:+.2f}% | {etf['vol_ratio']:.2f} | {etf['rsi']:.0f} | {etf['ma20']:.3f} | {etf['ma20_deviation_pct']:+.2f}% | {excess_pct:+.2f}% | {etf['fund_flow']} | {etf['policy']} | {etf['score']['total']}（{etf['score']['policy_catalyst']}/{etf['score']['technical']}/{etf['score']['sentiment_strength']}/{etf['score']['risk_reward']}） | {etf['signal_grade']} | {'有效' if etf['data_quality']['valid'] else '/'.join(etf['data_quality']['issues'])} | {current_position_pct:.1f}% | {etf['position']} |"
         )
 
     report.append("\n## 🌡️ 市场环境\n")
@@ -1212,17 +1639,33 @@ def generate_report_v2(
     report.append(f"**{position_emoji} 总权益仓位:** {equity_ratio:.1f}%")
     report.append(f"**🎚️ 总仓位上限:** 65%（{cap_note}）\n")
 
-    report.append("---\n## 📝 AI目标仓位任务\n")
-    report.append(f"请按 X-Plan {METHODOLOGY_VERSION} 每日一次目标仓位系统输出，不要使用“酌情、小仓、10%-15%”等浮动表述。\n")
-    report.append("1. **横向比较全池候选与现有持仓**：资金只流向今日更强的标的。")
-    report.append("2. **固定目标仓位档**：0% / 10% / 15% / 20%。B=10%，A=15%，S=20%。")
-    report.append("3. **动作由目标仓位差决定**：今日目标高于当前仓位才ADD/BUY，低于当前仓位才REDUCE/SELL。")
-    report.append("4. **总权益仓位上限65%**：若已因上涨漂移超过65%，不强制卖，但禁止新增/加仓。")
-    report.append("5. **SELL/REDUCE原因必须用规则代码**：RISK_STOP / TREND_BREAK / TIME_FAIL / SIGNAL_DOWNGRADE / PROFIT_WEAKEN / SWITCH_OUT / OVERHEAT_HOLD。")
-    report.append("6. **缺关键字段时只能降级或WATCH_DATA_GAP，不得猜测升级。**\n")
-    report.append("操作清单必须使用以下表格格式：\n")
-    report.append("| 操作编号 | 类型 | 代码 | 名称 | 当前目标仓位% | 今日目标仓位% | 调整仓位 | 规则代码 | 信号等级 | 中文操作依据 | 关键指标 |")
-    report.append("|---|---|---|---|---:|---:|---:|---|---|---|---|")
+    if decision:
+        report.append("\n## ✅ 扫描器权威操作清单\n")
+        report.append("| 操作编号 | 类型 | 代码 | 名称 | 当前目标仓位% | 今日目标仓位% | 调整仓位 | 规则代码 | 信号等级 | 中文操作依据 | 关键指标 |")
+        report.append("|---|---|---|---|---:|---:|---:|---|---|---|---|")
+        for op in decision["operations"]:
+            metrics = op.get("metrics") or {}
+            metrics_text = (
+                f"评分:{metrics.get('score', 0)} 量比:{metrics.get('vol_ratio', 0)} "
+                f"MA20偏离:{metrics.get('ma20_deviation_pct', 0):+.2f}% "
+                f"超额沪深300:{metrics.get('relative_hs300_strength_pct', 0):+.2f}% "
+                f"资金流:{metrics.get('fund_flow', '')}"
+                if metrics
+                else "无"
+            )
+            report.append(
+                f"| {op['id']} | {op['action']} | {op['symbol']} | {op['name']} | "
+                f"{op['current_target_position_pct']}% | {op['target_position_pct']}% | "
+                f"{op['adjustment_pct']:+g}% | {op['rule_code']} | {op['signal_grade']} | "
+                f"{op['reason']} | {metrics_text} |"
+            )
+        report.append(
+            f"\n**组合目标仓位:** {decision['portfolio']['target_equity_position_pct']:.1f}% "
+            f"/ 上限{MAX_EQUITY_POSITION_PCT}%"
+        )
+
+    report.append("---\n## 🔍 AI审计任务\n")
+    report.append("扫描器已完成评分、等级、仓位和操作决策。AI只能检查数学、规则一致性与数据异常，不得重新评分、修改等级或另造操作清单。\n")
     report.append(
         f"*📡 数据来源: 新浪财经 + AKShare* \n*🕐 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}* \n*📖 方法论版本: {METHODOLOGY_DESC} / scanner v{SYSTEM_VERSION}*"
     )
@@ -1274,11 +1717,30 @@ def main(force_refresh=False):
         holdings_data, wave_cards, total_value = scan_holdings_with_wave_management(
             holdings_config, market["realtime"], etf_pool
         )
-        etf_list = scan_etf_pool(etf_pool, holding_symbols, market["realtime"])
+        etf_list = scan_etf_pool(
+            etf_pool,
+            holding_symbols,
+            market["realtime"],
+            base_scores,
+            index_change,
+        )
+        decision = build_authoritative_decision(
+            etf_list, holdings_data, total_value, cash_available
+        )
 
         report = generate_report_v2(
-            market, etf_list, holdings_data, wave_cards, total_value, cash_available
+            market,
+            etf_list,
+            holdings_data,
+            wave_cards,
+            total_value,
+            cash_available,
+            decision,
         )
+
+        with open(DECISION_FILE, "w", encoding="utf-8") as f:
+            json.dump(decision, f, ensure_ascii=False, indent=2)
+        print(f"✅ {DECISION_FILE} 已生成（扫描器权威决策）")
 
         if os.environ.get("GITHUB_ACTIONS"):
             with open("report.txt", "w", encoding="utf-8") as f:
@@ -1289,7 +1751,7 @@ def main(force_refresh=False):
         print(report)
         print("=" * 80)
         print("\n✅ 扫描完成！")
-        print("\n💡 下一步：由正式 DeepSeek 链路生成目标仓位分析")
+        print("\n💡 下一步：由 DeepSeek 对扫描器权威决策做独立审计")
 
     except KeyboardInterrupt:
         print("\n⚠️ 用户中断")

@@ -26,6 +26,11 @@ jobs:
             automation/ai_review.py
             automation/gemini_review.py
             automation/generate_dashboard.py
+            automation/policy_research/collect_policy_news.py
+            automation/policy_research/extract_policy_events.py
+            automation/policy_research/score_policy_delta.py
+            automation/policy_research/compare_policy_decision.py
+            automation/policy_research/run_policy_research.py
             automation/send_report.py
             automation/versioning.py
             VERSION.json
@@ -41,7 +46,8 @@ jobs:
             automation/test_gemini_review.py \
             automation/test_send_report.py \
             automation/test_versioning.py \
-            automation/test_observe.py
+            automation/test_observe.py \
+            automation/policy_research/test_policy_research.py
 
       - name: 运行扫描并保存报告
         run: |
@@ -52,6 +58,13 @@ jobs:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
+
+      - name: 运行政策旁路观察（只写 dashboard 旁路数据）
+        run: python automation/policy_research/run_policy_research.py
+        env:
+          DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+        continue-on-error: true
       - name: 写入扫描器看板（不调用AI）
         run: python automation/generate_dashboard.py
         env:
@@ -65,3 +78,5 @@ jobs:
         run: python automation/send_report.py
         env:
           BARK_KEY: ${{ secrets.BARK_KEY }}
+
+

@@ -55,6 +55,24 @@ DECISION_FILE = "decision.json"
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "none").strip().lower()
 
 
+def load_policy_research() -> dict:
+    path = os.path.join("data", "policy_research", "snapshots", "policy_watchlist.json")
+    if not os.path.exists(path):
+        path = os.path.join("data", "policy_research", "snapshots", "last_decision_compare.json")
+    if not os.path.exists(path):
+        return {"enabled": True, "ok": False, "error": "policy_watchlist.json 尚未生成"}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "watchlist" in data:
+            data = data["watchlist"]
+        data["enabled"] = True
+        data["ok"] = True
+        return data
+    except Exception as exc:
+        return {"enabled": True, "ok": False, "error": f"政策旁路观察读取失败: {exc}"}
+
+
 def call_ai_audit(report_text: str, decision: dict) -> tuple:
     provider = AI_PROVIDER if AI_PROVIDER in {"none", "gemini", "deepseek"} else "none"
     if provider == "none":
@@ -163,3 +181,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

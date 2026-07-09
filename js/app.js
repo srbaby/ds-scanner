@@ -75,6 +75,17 @@ window.onload = async () => {
   document.getElementById('new-date').value = today();
   await loadVersionManifest();
   document.getElementById('app-version').textContent = versionData.methodology_version;
+  const brandRefresh = document.getElementById('brand-refresh');
+  if (brandRefresh) {
+    const trigger = () => forceRefreshDashboard();
+    brandRefresh.addEventListener('click', trigger);
+    brandRefresh.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        trigger();
+      }
+    });
+  }
 
   if (TOKEN && GIST_ID) {
     document.getElementById('input-token').value = TOKEN;
@@ -99,6 +110,23 @@ window.onload = async () => {
   }
 };
 
+async function forceRefreshDashboard() {
+  if (!TOKEN || !GIST_ID) return;
+  setStatus('刷新中…', '');
+  try {
+    await loadData();
+    renderAll();
+    renderDashboard(dashboardData);
+    renderObserver(statsData);
+    renderExecutionHistory();
+    setStatus('已同步', 'ok');
+    document.getElementById('display-sync').textContent = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
+    toast('已强制刷新最新看板', 'success');
+  } catch (e) {
+    setStatus('刷新失败', 'err');
+    toast(`刷新失败：${e.message}`, 'error');
+  }
+}
 function today() {
   return new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD
 }
@@ -863,6 +891,75 @@ function renderQuickGuide(data, aiText) {
   return true;
 }
 
+function renderPolicyWatch(data) {
+  const panel = document.getElementById('policy-watch');
+  const meta = document.getElementById('policy-watch-meta');
+  const badge = document.getElementById('policy-watch-badge');
+  const body = document.getElementById('policy-watch-body');
+  if (!panel || !meta || !badge || !body) return;
+
+  if (!data || data.enabled === false) {
+    panel.hidden = true;
+    body.innerHTML = '';
+    meta.textContent = '等待政策旁路数据';
+    badge.textContent = '—';
+    return;
+  }
+
+  panel.hidden = false;
+  if (data.ok === false) {
+    meta.textContent = data.error || '政策旁路观察暂不可用';
+    badge.textContent = '未生成';
+    body.innerHTML = '<div class="policy-watch-empty">等待下一次扫描生成政策旁路观察。</div>';
+    return;
+  }
+
+  const summary = data.summary || {};
+  const risk = data.holdings_risk || [];
+  const triggers = data.near_triggers || [];
+  const downgrades = data.near_downgrades || [];
+  const deltas = data.active_policy_deltas || [];
+  const totalWatch = risk.length + triggers.length + downgrades.length;
+  meta.textContent = [data.generated_at, data.updated_frequency].filter(Boolean).join(' · ') || '随每日扫描更新';
+  badge.textContent = totalWatch ? `${totalWatch}项关注` : '无触发';
+
+  const sections = [];
+  sections.push(`<div class="policy-watch-summary">激进度 ${signedNumber(summary.aggression_index || 0)} · ${escapeHtml(summary.verdict || '可接受')} · 活跃偏移 ${summary.active_delta_count || deltas.length}</div>`);
+  sections.push(policyWatchRows('持仓风险', risk, 'risk'));
+  sections.push(policyWatchRows('可能触发操作', triggers, 'trigger'));
+  sections.push(policyWatchRows('持仓降级观察', downgrades, 'risk'));
+  if (deltas.length) {
+    sections.push('<div class="policy-delta-list">' + deltas.map(row => {
+      const cls = row.delta > 0 ? 'is-pos' : 'is-neg';
+      return `<span class="policy-delta ${cls}">${escapeHtml(row.theme)} ${signedNumber(row.delta)}</span>`;
+    }).join('') + '</div>');
+  }
+  body.innerHTML = sections.join('');
+}
+
+function policyWatchRows(title, rows, tone) {
+  if (!rows || !rows.length) return '';
+  const items = rows.map(row => {
+    const blockers = row.gap?.blockers?.length ? row.gap.blockers.join(' / ') : '已满足主要条件';
+    const eventTitle = row.events?.[0]?.title || '';
+    const action = row.shadow_action ? `${row.shadow_action} ${row.target_position_pct || 0}%` : `差B级 ${row.gap?.score_to_b ?? '—'}分`;
+    return `<div class="policy-watch-row policy-watch-${tone}">
+      <div class="policy-watch-row-main">
+        <span class="policy-watch-symbol">${escapeHtml(row.symbol || '')}</span>
+        <span class="policy-watch-name">${escapeHtml(row.name || '')}</span>
+        <span class="policy-watch-action">${escapeHtml(action)}</span>
+      </div>
+      <div class="policy-watch-row-sub">${escapeHtml(row.theme || '')} ${signedNumber(row.policy_delta || 0)} · 评分 ${row.base_score || 0}→${row.shadow_score || 0} · ${escapeHtml(blockers)}</div>
+      ${eventTitle ? `<div class="policy-watch-event">${escapeHtml(eventTitle)}</div>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="policy-watch-group"><div class="policy-watch-group-title">${escapeHtml(title)}</div>${items}</div>`;
+}
+
+function signedNumber(value) {
+  const n = Number(value || 0);
+  return `${n > 0 ? '+' : ''}${Number.isInteger(n) ? n : n.toFixed(2)}`;
+}
 // ============================================================
 // 扫描器权威决策 + AI非权威审计
 // ============================================================
@@ -878,6 +975,7 @@ function renderDashboard(data) {
   if (!data) {
     currentAiActions = [];
     if (quickGuide) quickGuide.hidden = true;
+    renderPolicyWatch(null);
     aiSection.classList.remove('ai-err');
     aiSection.classList.remove('is-stale');
     aiSection.classList.remove('is-fresh');
@@ -888,6 +986,8 @@ function renderDashboard(data) {
     reportBody.innerHTML = '<div class="empty-state"><div class="empty-icon">📡</div><div>暂无扫描数据</div><div class="empty-hint">等待 report.txt 推送</div></div>';
     return;
   }
+
+  renderPolicyWatch(data.policy_research);
 
   const ai = data.audit || data.ai || {};
   aiMeta.textContent = [data.methodology_version, ai.model]
@@ -1913,3 +2013,6 @@ function flashRefresh() {
   clearTimeout(flashTimer);
   flashTimer = setTimeout(() => list.classList.remove('flash-refresh'), 900);
 }
+
+
+

@@ -18,7 +18,7 @@
 
         <!-- 顶部栏 -->
         <div class="topbar">
-            <div class="topbar-left">
+            <div class="topbar-left" id="brand-refresh" role="button" tabindex="0" title="强制刷新最新看板">
                 <img class="topbar-logo" src="favicon.png" alt="DS" />
                 <div class="topbar-title">Stock X</div>
                 <div class="topbar-version" id="app-version">v3.1</div>
@@ -122,7 +122,16 @@
                     </div>
                     <div class="quick-guide-body" id="quick-guide-body"></div>
                 </section>
-
+                <section class="policy-watch" id="policy-watch" hidden>
+                    <div class="policy-watch-head">
+                        <div>
+                            <div class="policy-watch-title">政策旁路观察</div>
+                            <div class="policy-watch-meta" id="policy-watch-meta">等待政策旁路数据</div>
+                        </div>
+                        <div class="policy-watch-badge" id="policy-watch-badge">—</div>
+                    </div>
+                    <div class="policy-watch-body" id="policy-watch-body"></div>
+                </section>
                 <details
                     class="info-section info-section-primary"
                     id="ai-section"
@@ -389,3 +398,4 @@
         <script src="js/app.js"></script>
     </body>
 </html>
+

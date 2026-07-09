@@ -25,3 +25,10 @@ decision.json
 
 # macOS 桌面服务文件，不入仓
 .DS_Store
+
+# Policy research runtime outputs
+/data/policy_research/raw/
+/data/policy_research/events/
+/data/policy_research/deltas/
+/data/policy_research/reports/
+/data/policy_research/snapshots/

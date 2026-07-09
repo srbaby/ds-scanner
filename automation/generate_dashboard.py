@@ -175,7 +175,6 @@ def main():
             "text": result["text"],
             "error": result["error"],
         },
-        "policy_research": load_policy_research(),
     }
     write_dashboard(data)
 

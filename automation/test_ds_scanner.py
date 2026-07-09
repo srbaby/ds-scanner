@@ -137,9 +137,9 @@ class ScannerDecisionTests(unittest.TestCase):
 
     def test_switch_out_replaces_weaker_holding_when_cap_is_full(self):
         held_signals = [
-            signal("588000", "B", 76),
-            signal("512480", "A", 82),
-            signal("515880", "A", 83),
+            signal("588000", "无效", 78),
+            signal("512480", "S", 88),
+            signal("515880", "S", 87),
         ]
         holdings = [
             {

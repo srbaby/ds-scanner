@@ -110,23 +110,6 @@ window.onload = async () => {
   }
 };
 
-async function forceRefreshDashboard() {
-  if (!TOKEN || !GIST_ID) return;
-  setStatus('刷新中…', '');
-  try {
-    await loadData();
-    renderAll();
-    renderDashboard(dashboardData);
-    renderObserver(statsData);
-    renderExecutionHistory();
-    setStatus('已同步', 'ok');
-    document.getElementById('display-sync').textContent = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
-    toast('已强制刷新最新看板', 'success');
-  } catch (e) {
-    setStatus('刷新失败', 'err');
-    toast(`刷新失败：${e.message}`, 'error');
-  }
-}
 function today() {
   return new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD
 }

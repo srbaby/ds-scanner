@@ -30,6 +30,7 @@ X-Plan 波段验证系统 - 尾盘扫描器 v3.1
 import json
 import math
 import os
+import sys
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -241,7 +242,10 @@ def load_base_scores():
             print("   当前使用硬编码兜底值，与战间期基准严重偏差：")
             print("   ⛔ 持仓止损判断可能完全失效，请立即检查JSON文件！")
             print("!" * 60 + "\n")
-            input("   确认已知晓风险，按回车键继续（或 Ctrl+C 退出）...")
+            if sys.stdin.isatty():
+                input("   确认已知晓风险，按回车键继续（或 Ctrl+C 退出）...")
+            else:
+                print("   ⚠️ 非交互环境，自动继续使用兜底值")
             return DEFAULT_BASE_SCORES
     else:
         print("💡 使用默认板块评分（首次运行）")

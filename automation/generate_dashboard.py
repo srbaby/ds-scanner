@@ -7,27 +7,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-X-Plan 看板数据生成器（DeepSeek自动分析）
+X-Plan 看板数据生成器（Gemini独立审计）
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 流程：
   1. 读取 report.txt（ds_scanner.py 刚生成的尾盘扫描报告）
-  2. 调用 ai_review.call_deepseek() 做四维评分分析
-  3. 把 {report原文, DeepSeek分析, 元信息} 写入 Gist 的 dashboard.json
+  2. 每日流程默认不调用 AI；Gemini/DeepSeek 实现保留给独立研究
+  3. 把 {report原文, 扫描器决策, 审计状态, 元信息} 写入 dashboard.json
      （与 etf_pool.json / holdings.json 同一个私有 Gist，复用现有 Token/权限）
 
 index.html 前端读取 dashboard.json：AI分析全文（干货）默认展开，report原文默认折叠
 （AI分析失败时自动展开report原文作兜底）。
 
 失败处理：
-  - DeepSeek调用失败（额度/网络/被拦截）不阻塞流程，dashboard.json中ai.ok=false，
-    前端展示错误信息，report原文照常可见，Bark推送不受影响。
+  - AI调用失败不阻塞流程，dashboard.json中audit.ok=false；
+    扫描器权威决策、看板和Bark推送不受影响。
   - Gist未配置（本地调试）时，写入本地同名文件 dashboard.json 供检查。
 
 环境变量：
   DS_SCANNER_GIST_ID  必填（线上），与 ds_scanner.py 共用
   GITHUB_TOKEN        必填（线上），与 ds_scanner.py 共用（GH_PAT，需 gist 写权限）
-  DEEPSEEK_API_KEY    必填，见 ai_review.py
-  DEEPSEEK_MODEL      可选，见 ai_review.py
+  AI_PROVIDER         可选，默认 none；gemini/deepseek 仅供独立调试
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -37,7 +36,8 @@ from datetime import datetime
 
 import requests
 
-from ai_review import call_deepseek, DEEPSEEK_MODEL
+from ai_review import DEEPSEEK_MODEL, call_deepseek
+from gemini_review import GEMINI_MODEL, call_gemini
 from versioning import (
     DATA_SCHEMA_VERSION,
     METHODOLOGY_VERSION,
@@ -52,6 +52,31 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 DASHBOARD_FILE = "dashboard.json"
 DECISION_FILE = "decision.json"
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "none").strip().lower()
+
+
+def call_ai_audit(report_text: str, decision: dict) -> tuple:
+    provider = AI_PROVIDER if AI_PROVIDER in {"none", "gemini", "deepseek"} else "none"
+    if provider == "none":
+        return provider, {
+            "enabled": False,
+            "ok": True,
+            "model": "",
+            "text": "",
+            "error": None,
+        }
+    try:
+        if provider == "deepseek":
+            return provider, call_deepseek(report_text, decision)
+        return provider, call_gemini(report_text, decision)
+    except Exception as exc:
+        model = DEEPSEEK_MODEL if provider == "deepseek" else GEMINI_MODEL
+        return provider, {
+            "ok": False,
+            "model": model,
+            "text": "",
+            "error": f"AI审计模块异常: {exc}",
+        }
 
 
 def _gist_headers():
@@ -100,12 +125,13 @@ def main():
     with open(DECISION_FILE, "r", encoding="utf-8") as f:
         decision = json.load(f)
 
-    print(f"🤖 调用 DeepSeek ({DEEPSEEK_MODEL}) 审计中...")
-    result = call_deepseek(report_text, decision)
-    if result["ok"]:
-        print("✅ DeepSeek 分析完成")
+    provider, result = call_ai_audit(report_text, decision)
+    if not result.get("enabled", True):
+        print("ℹ️ 每日AI审计已停用，直接发布扫描器权威决策")
+    elif result["ok"]:
+        print(f"✅ {provider} 审计完成")
     else:
-        print(f"⚠️ DeepSeek 分析失败（不影响report推送）: {result['error']}")
+        print(f"⚠️ {provider} 审计失败（扫描器决策仍有效）: {result['error']}")
 
     data = {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -115,7 +141,8 @@ def main():
         "report": report_text,
         "decision": decision,
         "audit": {
-            "provider": "deepseek",
+            "provider": provider,
+            "enabled": result.get("enabled", True),
             "model": result["model"],
             "ok": result["ok"],
             "text": result["text"],
@@ -123,7 +150,8 @@ def main():
         },
         # 兼容旧版前端；新链路只从 decision 读取交易操作。
         "ai": {
-            "provider": "deepseek",
+            "provider": provider,
+            "enabled": result.get("enabled", True),
             "model": result["model"],
             "ok": result["ok"],
             "text": result["text"],

@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import unittest
+from unittest.mock import patch
 
 import send_report
 
@@ -68,11 +69,11 @@ class SendReportTests(unittest.TestCase):
         report = "不可进入推送的超长原始报告" * 1000
         payload = send_report.build_payload(
             report,
-            dashboard_data=self.dashboard(ok=False, error="DeepSeek HTTP 503"),
+            dashboard_data=self.dashboard(ok=False, error="Gemini HTTP 503"),
         )
         self.assertIn("OP-01 BUY sh588800", payload["body"])
         self.assertIn("AI审计不可用", payload["body"])
-        self.assertIn("DeepSeek HTTP 503", payload["body"])
+        self.assertIn("Gemini HTTP 503", payload["body"])
         self.assertNotIn(report[:100], payload["body"])
 
     def test_all_recipients_are_attempted_before_failure(self):
@@ -99,6 +100,51 @@ class SendReportTests(unittest.TestCase):
                 keys=["first", "second"],
             )
         self.assertEqual(len(calls), 2)
+
+    def test_default_delivery_ignores_wife_key(self):
+        calls = []
+
+        class Response:
+            status_code = 200
+            text = "ok"
+
+            def raise_for_status(self):
+                return None
+
+        def fake_post(url, **kwargs):
+            calls.append(url)
+            return Response()
+
+        with patch.dict(
+            send_report.os.environ,
+            {"BARK_KEY": "main-only", "BARK_KEY_WIFE": "must-not-send"},
+            clear=False,
+        ):
+            send_report.send_bark(
+                "report",
+                self.dashboard(),
+                post=fake_post,
+            )
+        self.assertEqual(calls, ["https://api.day.app/main-only"])
+
+    def test_missing_dashboard_uses_decision_file_fallback(self):
+        decision = self.dashboard()["decision"]
+        recovered = send_report.dashboard_with_decision_fallback(None, decision)
+        body = send_report.build_bark_body("report", recovered)
+        self.assertIn("OP-01 BUY sh588800", body)
+        self.assertIn("AI审计不可用", body)
+
+    def test_disabled_ai_adds_no_audit_noise_to_bark(self):
+        dashboard = self.dashboard()
+        dashboard["audit"] = {
+            "enabled": False,
+            "ok": True,
+            "text": "",
+            "error": None,
+        }
+        body = send_report.build_bark_body("report", dashboard)
+        self.assertIn("OP-01 BUY sh588800", body)
+        self.assertNotIn("AI审计", body)
 
 
 def json_bytes(payload):

@@ -77,7 +77,7 @@ window.onload = async () => {
   document.getElementById('app-version').textContent = versionData.methodology_version;
   const brandRefresh = document.getElementById('brand-refresh');
   if (brandRefresh) {
-    const trigger = () => forceRefreshDashboard();
+    const trigger = () => location.reload();
     brandRefresh.addEventListener('click', trigger);
     brandRefresh.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') {

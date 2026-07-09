@@ -297,7 +297,7 @@
                             placeholder="1.000"
                             inputmode="decimal"
                             step="0.001"
-                            oninput="updateNewPreview()"
+                            oninput="updateNewPreview(); renderBuyGuidance()"
                         />
                     </div>
                 </div>
@@ -307,13 +307,16 @@
                 </div>
                 <div>
                     <div class="field-label">操作依据</div>
-                    <select id="new-reason"></select>
+                    <select id="new-reason" onchange="renderBuyGuidance()"></select>
                     <div class="reason-control">
                         <div class="reason-status" id="new-reason-status"></div>
                         <button type="button" class="reason-manual-btn" id="new-reason-manual" onclick="toggleManualReason('new-reason')">
                             转人工补录
                         </button>
                     </div>
+                </div>
+                <div class="operation-preview" id="new-guidance">
+                    输入当日 BUY / ADD 标的后显示建议份额
                 </div>
                 <div>
                     <div class="field-label">操作后可用资金</div>

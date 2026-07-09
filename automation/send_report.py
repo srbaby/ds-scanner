@@ -101,6 +101,7 @@ def decision_action_rows(dashboard_data):
                 "target": f"{op.get('target_position_pct', 0)}%",
                 "rule": op.get("rule_code") or "",
                 "reason": op.get("reason") or "",
+                "guidance": op.get("execution_guidance") or {},
             }
         )
     return rows
@@ -134,6 +135,14 @@ def build_bark_body(report_text, dashboard_data=None):
                     f"{row['id']} {row['action']} {code_name} "
                     f"{row['current']}→{row['target']} {row['rule']}"
                 )
+                guidance = row.get("guidance") or {}
+                if guidance:
+                    lines.append(
+                        f"  建议 {guidance.get('recommended_shares', 0):,}份"
+                        f"（{guidance.get('recommended_lots', 0)}手）"
+                        f" · 约¥{guidance.get('estimated_amount', 0):,.2f}"
+                        f" · 参考价{guidance.get('reference_price', 0):.3f}"
+                    )
                 if row["reason"]:
                     lines.append(f"  {row['reason']}")
         else:

@@ -50,10 +50,18 @@ const scannerActions = context.decisionOperationsToActions([{
   current_target_position_pct: 0, target_position_pct: 10, adjustment_pct: 10,
   rule_code: 'B_INITIAL_BUY', signal_grade: 'B', reason: '扫描器权威决策',
   metrics: { score: 78 },
+  execution_guidance: {
+    reference_price: 2.328, target_amount: 19315.56,
+    recommended_shares: 8200, recommended_lots: 82, estimated_amount: 19089.6,
+  },
 }]);
 assert.equal(scannerActions[0].authority, 'scanner');
 assert.equal(scannerActions[0].ruleCode, 'B_INITIAL_BUY');
 assert.equal(context.actionToReason(scannerActions[0]).data_confidence, 'scanner_authoritative');
+assert.equal(scannerActions[0].guidance.recommended_shares, 8200);
+const qtyGuidance = context.calculateBuyGuidance(193155.64, 10, 2.328);
+assert.equal(qtyGuidance.recommended_shares, 8200);
+assert.equal(qtyGuidance.recommended_lots, 82);
 
 vm.runInContext(`currentAiActions = ${JSON.stringify(parsed.actions)}`, context);
 const buyReasons = context.reasonOptionsFor('588800', ['BUY']);

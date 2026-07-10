@@ -283,7 +283,7 @@ def run_compare() -> Dict:
     etf_pool = ds_scanner.load_etf_pool()
     if not etf_pool:
         raise RuntimeError("data/etf_pool.json 不可用")
-    holdings_data, _, total_value = ds_scanner.scan_holdings_with_wave_management(
+    holdings_data, _, total_value, _ = ds_scanner.scan_holdings_with_wave_management(
         holdings_config, market["realtime"], etf_pool
     )
     base_rows = ds_scanner.scan_etf_pool(etf_pool, holding_symbols, market["realtime"], base_scores, index_change)

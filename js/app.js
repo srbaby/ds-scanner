@@ -201,6 +201,28 @@ async function loadData() {
   dataManifest = rawManifest ? JSON.parse(rawManifest) : {};
 }
 
+// 打开登记/操作弹窗前静默拉一次最新 dashboard.json，避免标签页开太久后
+// 当日扫描器操作清单（BUY/ADD信号）没刷新，导致原因匹配失败被逼走人工补录。
+// 只刷新 dashboardData/currentAiActions，不动 holdingsData，不影响正在编辑的持仓卡片。
+async function refreshScannerActions() {
+  if (!TOKEN || !GIST_ID) return;
+  try {
+    const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+      headers: { Authorization: `token ${TOKEN}` }
+    });
+    if (!r.ok) return;
+    const gist = await r.json();
+    const rawDashboard = gist.files?.['dashboard.json']?.content;
+    if (rawDashboard) dashboardData = JSON.parse(rawDashboard);
+  } catch (e) {
+    console.warn('刷新当日扫描器操作清单失败，暂用本地缓存数据', e);
+  }
+  const scannerOps = dashboardData?.decision?.operations || [];
+  currentAiActions = scannerOps.length
+    ? decisionOperationsToActions(scannerOps)
+    : (extractQuickGuide((dashboardData?.ai || {}).text || '')?.actions || []);
+}
+
 // ============================================================
 // 写回 Gist
 // ============================================================
@@ -1517,7 +1539,8 @@ function applyBuyGuidance() {
   updateNewPreview();
 }
 
-function openDrawer() {
+async function openDrawer() {
+  await refreshScannerActions();
   document.getElementById('new-symbol').value = '';
   delete document.getElementById('new-symbol').dataset.fullCode;
   document.getElementById('new-qty').value = '';
@@ -1744,7 +1767,8 @@ async function saveCard(idx) {
   await persistExecution(event, before, after);
 }
 
-function openOperationDialog(mode, idx, options = {}) {
+async function openOperationDialog(mode, idx, options = {}) {
+  await refreshScannerActions();
   const dialog = document.getElementById('operation-dialog');
   const h = Number.isInteger(idx) && idx >= 0 ? holdingsData.holdings[idx] : null;
   document.getElementById('operation-mode').value = mode;
@@ -1846,11 +1870,15 @@ async function confirmOperationDialog() {
 function eventDisplayState(event) {
   const reversed = executionEvents.some(row => row.event_type === 'REVERSE_EVENT' && row.target_event_id === event.event_id);
   if (reversed) return { status: '已撤销', cls: 'reversed' };
+  // "更正原因"在这套系统里只改依据标签（rule_code/ai_action_id等），从不改数量/成本/资金——
+  // 对投资者来说这只是内部标签修正，不代表交易本身有问题，所以正常展示为"有效"，
+  // 不再单独标"已更正"制造噪音。底层 execution_events 台账仍完整保留更正事件本身，
+  // 只是展示层不特殊处理。
   const correction = [...executionEvents].reverse()
     .find(row => row.event_type === 'CORRECT_REASON' && row.target_event_id === event.event_id);
   if (correction) return {
-    status: '已更正',
-    cls: 'corrected',
+    status: '有效',
+    cls: 'effective',
     reason_zh: correction.reason_zh,
     rule_code: correction.rule_code,
   };

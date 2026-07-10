@@ -1270,18 +1270,27 @@
     background: var(--bg3);
     border-bottom: 1px solid var(--bd);
   }
+  .policy-watch-title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
   .policy-watch-title {
     color: var(--accent);
     font-family: var(--f-num);
     font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.08em;
+    flex-shrink: 0;
   }
   .policy-watch-meta {
-    margin-top: 3px;
-    color: var(--t2);
+    color: var(--t3);
     font-size: 11px;
     line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .policy-watch-badge {
     flex-shrink: 0;

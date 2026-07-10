@@ -79,4 +79,8 @@ jobs:
         env:
           BARK_KEY: ${{ secrets.BARK_KEY }}
 
+      - name: 扫描健康门禁（在Bark之后，仅让Actions历史诚实）
+        if: always()
+        run: |
+          python -c "import json,sys; d=json.load(open('decision.json')); h=(d.get('portfolio') or {}).get('health','ok'); print('health=',h); sys.exit(1 if h!='ok' else 0)"
 

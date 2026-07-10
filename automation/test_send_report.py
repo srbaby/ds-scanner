@@ -154,6 +154,52 @@ class SendReportTests(unittest.TestCase):
         self.assertIn("OP-01 BUY sh588800", body)
         self.assertNotIn("AI审计", body)
 
+    def test_bark_body_flags_degraded(self):
+        dashboard = self.dashboard()
+        dashboard["decision"]["portfolio"] = {
+            "health": "degraded",
+            "data_gap_holdings": ["512690", "588800"],
+        }
+        body = send_report.build_bark_body("扫描报告正文", dashboard)
+        self.assertTrue(body.startswith("🔴 数据降级 · 止损未评估"))
+        self.assertIn("止损未评估", body)
+        self.assertIn("512690", body)
+        self.assertIn("588800", body)
+
+        payload = send_report.build_payload(
+            "扫描报告正文", "2026-07-10", dashboard_data=dashboard
+        )
+        self.assertEqual(payload["title"], "🔴 数据降级 X-Plan v3.1 波段扫描 2026-07-10")
+
+    def test_bark_title_has_three_distinct_states(self):
+        today = "2026-07-10"
+        ok_title = send_report.build_payload(
+            "report", today, dashboard_data=self.dashboard()
+        )["title"]
+
+        degraded = self.dashboard()
+        degraded["decision"]["portfolio"] = {
+            "health": "degraded",
+            "data_gap_holdings": ["512690"],
+        }
+        degraded_title = send_report.build_payload(
+            "report", today, dashboard_data=degraded
+        )["title"]
+
+        crashed = self.dashboard()
+        crashed["decision"]["portfolio"] = {"health": "crashed", "data_gap_holdings": []}
+        crashed_title = send_report.build_payload(
+            "report", today, dashboard_data=crashed
+        )["title"]
+
+        self.assertTrue(ok_title.startswith("📡"))
+        self.assertTrue(degraded_title.startswith("🔴 数据降级"))
+        self.assertTrue(crashed_title.startswith("🔴 扫描崩溃"))
+        self.assertEqual(len({ok_title, degraded_title, crashed_title}), 3)
+        # 不应出现多个 emoji 图标堆叠成串（如 "🔴 📡"）
+        for title in (ok_title, degraded_title, crashed_title):
+            self.assertNotIn("🔴 📡", title)
+
 
 def json_bytes(payload):
     import json

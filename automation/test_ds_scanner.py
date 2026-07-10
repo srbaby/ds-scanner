@@ -206,6 +206,77 @@ class ScannerDecisionTests(unittest.TestCase):
         self.assertTrue(rows[0]["data_quality"]["valid"])
         self.assertIn("total", rows[0]["score"])
 
+    def test_unpriced_holding_is_reported_not_dropped(self):
+        holdings_config = {
+            "holdings": [
+                {
+                    "symbol": "sh588000",
+                    "qty": 100,
+                    "cost": 1.0,
+                    "buy_date": "2026-01-01",
+                    "wave_type": "快速波段",
+                }
+            ]
+        }
+        # 模拟新浪+腾讯双源都拿不到价（fetch_realtime 已经是新浪+腾讯合并后的结果）。
+        with patch.object(ds_scanner, "fetch_realtime", return_value={}):
+            holdings_data, wave_cards, total_value, unpriced = (
+                ds_scanner.scan_holdings_with_wave_management(
+                    holdings_config, {}, {}
+                )
+            )
+
+        self.assertEqual(holdings_data, [])
+        self.assertEqual(unpriced, ["588000"])
+
+        decision = ds_scanner.build_authoritative_decision(
+            [], holdings_data, total_value, 100000, unpriced
+        )
+        self.assertEqual(decision["portfolio"]["health"], "degraded")
+        self.assertEqual(decision["portfolio"]["data_gap_holdings"], ["588000"])
+
+    def test_partial_quote_cannot_produce_buy(self):
+        days = [date.today() - timedelta(days=value) for value in range(30, 0, -1)]
+        history = pd.DataFrame(
+            {
+                "date": days,
+                "open": [1 + i * 0.001 for i in range(30)],
+                "high": [1.01 + i * 0.001 for i in range(30)],
+                "low": [0.99 + i * 0.001 for i in range(30)],
+                "close": [1 + i * 0.001 for i in range(30)],
+                "volume": [1000] * 30,
+            }
+        )
+        realtime = {
+            "sh588000": {
+                "price": 1.03,
+                "last_close": history.iloc[-1]["close"],
+                "change_pct": 5.0,
+                "volume": 0,
+                "partial": True,
+            }
+        }
+        pool = {
+            "sh588000": {
+                "name": "科创50ETF",
+                "category": "科技成长",
+                "policy": 20,
+                "_breakdown": {"base": 12},
+            }
+        }
+        with patch.object(ds_scanner, "fetch_sina_history", return_value=history), patch.object(
+            ds_scanner, "calc_volume_time_factor", return_value=2
+        ):
+            rows = ds_scanner.scan_etf_pool(
+                pool, set(), realtime, {"科技成长": 12}, index_change=0
+            )
+
+        self.assertIn("PARTIAL_QUOTE_NO_VOLUME", rows[0]["data_quality"]["issues"])
+        self.assertEqual(rows[0]["signal_grade"], "无效")
+
+        decision = ds_scanner.build_authoritative_decision(rows, [], 0, 100000)
+        self.assertFalse(any(op["action"] == "BUY" for op in decision["operations"]))
+
 
 if __name__ == "__main__":
     unittest.main()

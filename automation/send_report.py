@@ -107,6 +107,15 @@ def decision_action_rows(dashboard_data):
     return rows
 
 
+def portfolio_health(dashboard_data):
+    """从 decision.portfolio 读取降级/崩溃状态，供 body 告警块与 title 前缀共用。"""
+    dashboard_data = dashboard_data or {}
+    portfolio = (dashboard_data.get("decision") or {}).get("portfolio") or {}
+    health = portfolio.get("health") or "ok"
+    data_gap_holdings = portfolio.get("data_gap_holdings") or []
+    return health, data_gap_holdings
+
+
 def build_bark_body(report_text, dashboard_data=None):
     dashboard_data = dashboard_data or {}
     decision = dashboard_data.get("decision") or {}
@@ -114,7 +123,20 @@ def build_bark_body(report_text, dashboard_data=None):
     ai = dashboard_data.get("ai") or {}
     generated_at = dashboard_data.get("generated_at") or ""
     version = dashboard_data.get("methodology_version") or METHODOLOGY_VERSION
-    lines = [f"{version} · {generated_at or '本次扫描'}"]
+
+    health, data_gap_holdings = portfolio_health(dashboard_data)
+    lines = []
+    if health == "crashed":
+        lines.extend(["🔴 扫描崩溃 · 本次无有效决策，请勿依据执行", ""])
+    elif health != "ok" or data_gap_holdings:
+        lines.append("🔴 数据降级 · 止损未评估")
+        if data_gap_holdings:
+            lines.append(
+                f"无行情持仓：{' / '.join(data_gap_holdings)}（请手动核价，勿依赖本清单判断止损）"
+            )
+        lines.append("")
+
+    lines.append(f"{version} · {generated_at or '本次扫描'}")
 
     rows = decision_action_rows(dashboard_data)
     if rows:
@@ -227,8 +249,15 @@ def dashboard_with_decision_fallback(dashboard_data=None, decision_data=None):
 
 def build_payload(report_text, today=None, dashboard_data=None):
     today = today or datetime.now().strftime('%Y-%m-%d')
+    health, _ = portfolio_health(dashboard_data)
+    if health == "crashed":
+        title_icon = "🔴 扫描崩溃"
+    elif health != "ok":
+        title_icon = "🔴 数据降级"
+    else:
+        title_icon = "📡"
     return {
-        "title": f"📡 X-Plan {METHODOLOGY_VERSION} 波段扫描 {today}",
+        "title": f"{title_icon} X-Plan {METHODOLOGY_VERSION} 波段扫描 {today}",
         "body": build_bark_body(report_text, dashboard_data),
         "level": "active",
         "group": "X-Plan扫描",

@@ -405,6 +405,62 @@ def fetch_sina_realtime(codes: List[str]) -> Dict:
         return {}
 
 
+def fetch_tencent_realtime(codes: List[str]) -> Dict:
+    """腾讯行情兜底（新浪限流/为空时使用）。
+
+    仅用于补齐价格以评估止损/趋势，不参与量比升档：腾讯 gtimg 的成交量单位
+    与新浪不一致，若拿去算量比会引入隐性单位 bug，可能驱动错误 BUY。
+    """
+    if not codes:
+        return {}
+
+    url = f"http://qt.gtimg.cn/q={','.join(codes)}"
+    try:
+        resp = requests.get(url, headers=HEADERS, proxies=PROXIES, timeout=10)
+        resp.encoding = "gbk"
+        results = {}
+
+        for line in resp.text.strip().split("\n"):
+            if '="' not in line or "v_" not in line:
+                continue
+            code = line.split("v_")[1].split("=")[0]
+            content = line.split('="')[1].strip('";\n')
+            parts = content.split("~")
+
+            if len(parts) < 5:
+                continue
+
+            price = float(parts[3]) if parts[3] else 0
+            last_close = float(parts[4]) if parts[4] else 0
+            change_pct = (price / last_close - 1) * 100 if last_close > 0 else 0
+
+            results[code] = {
+                "name": parts[1],
+                "price": price,
+                "last_close": last_close,
+                "change_pct": change_pct,
+                "volume": 0,
+                "partial": True,
+            }
+
+        return results
+    except Exception as e:
+        print(f"  ⚠️ 腾讯数据获取失败: {e}")
+        return {}
+
+
+def fetch_realtime(codes: List[str]) -> Dict:
+    """多源行情兜底：新浪优先，缺失或price<=0的标的用腾讯补齐（腾讯条目带 partial=True）。"""
+    results = fetch_sina_realtime(codes)
+    missing = [code for code in codes if results.get(code, {}).get("price", 0) <= 0]
+    if missing:
+        tencent = fetch_tencent_realtime(missing)
+        for code, rt in tencent.items():
+            if rt.get("price", 0) > 0:
+                results[code] = rt
+    return results
+
+
 def fetch_sina_history(code: str, days: int = 30) -> Optional[pd.DataFrame]:
     """获取历史K线数据"""
     try:
@@ -985,7 +1041,7 @@ def scan_market():
     scan_time = datetime.now()
     index = fetch_index_sina()
     codes = list(ETF_WATCHLIST_BASE.keys())
-    realtime = fetch_sina_realtime(codes)
+    realtime = fetch_realtime(codes)
 
     rising = len([v for v in realtime.values() if v.get("change_pct", 0) > 0])
     total = len(realtime)
@@ -1017,6 +1073,7 @@ def scan_holdings_with_wave_management(
     holdings_data = []
     wave_cards = []
     total_value = 0
+    unpriced_holdings = []
 
     for h in holdings_list:
         if h.get("symbol", "").startswith("_"):
@@ -1038,12 +1095,14 @@ def scan_holdings_with_wave_management(
         
         # ─── ✅ 修正：如果不在实时行情池中，查到后立即补录，确保后续能拿到在线中文名 ───
         if code not in realtime:
-            custom_rt = fetch_sina_realtime([code])
+            custom_rt = fetch_realtime([code])
             if code in custom_rt:
                 realtime[code] = custom_rt[code]
 
         price = realtime.get(code, {}).get("price", 0)
         if price == 0:
+            # 双源行情都拿不到价：该持仓无法算风控，但必须上报而不是静默消失
+            unpriced_holdings.append(code.replace("sh", "").replace("sz", ""))
             continue
 
         profit_pct = ((price - h["cost"]) / h["cost"] * 100) if h["cost"] > 0 else 0
@@ -1148,7 +1207,7 @@ def scan_holdings_with_wave_management(
         print(".", end="", flush=True)
 
     print(" 完成!")
-    return holdings_data, wave_cards, total_value
+    return holdings_data, wave_cards, total_value, unpriced_holdings
 
 
 def calc_volume_time_factor() -> float:
@@ -1185,6 +1244,8 @@ def scan_etf_pool(
         rt = realtime[code]
         history = completed_history(fetch_sina_history(code, 45))
         quality_issues = []
+        if rt.get("partial"):
+            quality_issues.append("PARTIAL_QUOTE_NO_VOLUME")
         if history is None or len(history) < 20:
             quality_issues.append("INSUFFICIENT_HISTORY")
             history = history if history is not None else pd.DataFrame()
@@ -1332,6 +1393,7 @@ def build_authoritative_decision(
     holdings_data: List[Dict],
     total_value: float,
     cash_available: float,
+    unpriced_holdings: List[str] = None,
 ) -> Dict:
     """由扫描器生成唯一权威信号与操作清单。"""
     total_asset = total_value + cash_available
@@ -1529,6 +1591,8 @@ def build_authoritative_decision(
                 sum(row["target_position_pct"] for row in proposals), 1
             ),
             "max_equity_position_pct": MAX_EQUITY_POSITION_PCT,
+            "health": "degraded" if unpriced_holdings else "ok",
+            "data_gap_holdings": unpriced_holdings or [],
         },
         "data_quality": {
             "valid_count": sum(1 for row in etf_list if row["data_quality"]["valid"]),
@@ -1762,8 +1826,10 @@ def main(force_refresh=False):
                 print("⚠️ etf_pool.json为空，执行全量扫描")
                 etf_pool = refresh_etf_pool(base_scores, index_change)
 
-        holdings_data, wave_cards, total_value = scan_holdings_with_wave_management(
-            holdings_config, market["realtime"], etf_pool
+        holdings_data, wave_cards, total_value, unpriced_holdings = (
+            scan_holdings_with_wave_management(
+                holdings_config, market["realtime"], etf_pool
+            )
         )
         etf_list = scan_etf_pool(
             etf_pool,
@@ -1773,7 +1839,7 @@ def main(force_refresh=False):
             index_change,
         )
         decision = build_authoritative_decision(
-            etf_list, holdings_data, total_value, cash_available
+            etf_list, holdings_data, total_value, cash_available, unpriced_holdings
         )
 
         report = generate_report_v2(
@@ -1808,6 +1874,22 @@ def main(force_refresh=False):
         import traceback
 
         traceback.print_exc()
+
+        # Bark 是主报警通道：这里只落一个最小 decision.json 供上报，不 sys.exit，
+        # 否则会跳过后续 Bark 推送步骤，把报警一起吞掉。
+        crashed_decision = {
+            "schema_version": "v3.0",
+            "authority": "scanner",
+            "operations": [],
+            "portfolio": {"health": "crashed", "data_gap_holdings": []},
+            "error": str(e),
+        }
+        try:
+            with open(DECISION_FILE, "w", encoding="utf-8") as f:
+                json.dump(crashed_decision, f, ensure_ascii=False, indent=2)
+            print(f"⚠️ 已写入降级 {DECISION_FILE}（health=crashed），供 Bark 报警读取")
+        except Exception as write_err:
+            print(f"❌ 连降级 {DECISION_FILE} 都写不出: {write_err}")
 
 
 if __name__ == "__main__":

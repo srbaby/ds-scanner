@@ -903,7 +903,8 @@ function renderPolicyWatch(data) {
   const downgrades = data.near_downgrades || [];
   const deltas = data.active_policy_deltas || [];
   const totalWatch = risk.length + triggers.length + downgrades.length;
-  meta.textContent = [data.generated_at, data.updated_frequency].filter(Boolean).join(' · ') || '随每日扫描更新';
+  meta.textContent = data.generated_at || '随每日扫描更新';
+  meta.title = data.updated_frequency || '';
   badge.textContent = totalWatch ? `${totalWatch}项关注` : '无触发';
 
   const sections = [];

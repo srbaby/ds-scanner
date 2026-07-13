@@ -16,6 +16,14 @@
         <!-- Toast -->
         <div class="toast" id="toast"></div>
 
+        <!-- 页面开太久提示：内存里的 currentAiActions 可能是旧标签页加载时的快照，
+             不会随时间自动刷新；登记操作时点"刷新"重新拉取即可，不需要整页重载 -->
+        <div class="stale-banner" id="stale-banner" hidden>
+            页面已打开较久，登记前建议刷新页面以确保拿到最新扫描数据。
+            <button type="button" onclick="location.reload()">立即刷新</button>
+            <button type="button" onclick="dismissStaleBanner()">知道了</button>
+        </div>
+
         <!-- 顶部栏 -->
         <div class="topbar">
             <div class="topbar-left" id="brand-refresh" role="button" tabindex="0" title="刷新页面">
@@ -395,7 +403,10 @@
             </form>
         </dialog>
 
-        <script src="js/app.js"></script>
+        <!-- ?v= 每次改 js/app.js 后手动递增，绕过 max-age=600 的 HTTP 缓存，
+             确保新访问/整页刷新能拿到最新逻辑（不解决"标签页开太久不刷新"，那个由
+             stale-banner + pageLoadedAt 8小时检测兜底，见 js/app.js） -->
+        <script src="js/app.js?v=20260713a"></script>
     </body>
 </html>
 

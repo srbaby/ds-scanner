@@ -1126,6 +1126,40 @@
   .toast.success { border-color: var(--dn); color: var(--dn); }
   .toast.error { border-color: var(--danger); color: var(--danger); }
 
+  /* ════════ 页面开太久提示条 ════════ */
+  .stale-banner {
+    position: fixed;
+    top: var(--sat);
+    left: 0; right: 0;
+    z-index: 998;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 16px;
+    background: var(--bg3);
+    border-bottom: 1px solid var(--danger);
+    color: var(--danger);
+    font-size: 12px;
+    font-weight: 500;
+    text-align: center;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+  .stale-banner button {
+    border: 1px solid var(--danger);
+    background: transparent;
+    color: var(--danger);
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .stale-banner button:active { background: var(--danger); color: var(--bg2); }
+  .stale-banner[hidden] { display: none; }
+
   /* ════════ 加载动画 ════════ */
   .spinner {
     display: inline-block;

@@ -65,6 +65,10 @@ let gistRevision = '';
 let currentAiActions = [];
 let operationSaveInFlight = false;
 const editOpenState = new Set();
+// refreshScannerActions() 每次调用后写入这里，fillReasonSelect 读取它来判断三态
+// （已确认无信号 / 数据未刷新导致无法判断 / 正常匹配上），避免把"没刷新到"误报成"确认没有"。
+let lastScanStatus = { ok: false, fresh: false, reason: 'not_loaded', generatedDate: '' };
+let pageLoadedAt = Date.now();
 
 // ============================================================
 // 初始化
@@ -204,23 +208,36 @@ async function loadData() {
 // 打开登记/操作弹窗前静默拉一次最新 dashboard.json，避免标签页开太久后
 // 当日扫描器操作清单（BUY/ADD信号）没刷新，导致原因匹配失败被逼走人工补录。
 // 只刷新 dashboardData/currentAiActions，不动 holdingsData，不影响正在编辑的持仓卡片。
+//
+// 返回 {ok, fresh, reason, generatedDate} 而不是静默失败——2026-07-10/07-13 两次
+// 交易都是在这次 fetch 静默失败或拿到过期快照时被逼走 MANUAL_BACKFILL，调用方必须能
+// 区分"确认今日无信号"和"没拿到今日数据"，不能一概而论提示"今日清单无此代码"。
 async function refreshScannerActions() {
-  if (!TOKEN || !GIST_ID) return;
+  if (!TOKEN || !GIST_ID) {
+    return (lastScanStatus = { ok: false, fresh: false, reason: 'no_token', generatedDate: '' });
+  }
+  let gist;
   try {
     const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
       headers: { Authorization: `token ${TOKEN}` }
     });
-    if (!r.ok) return;
-    const gist = await r.json();
-    const rawDashboard = gist.files?.['dashboard.json']?.content;
-    if (rawDashboard) dashboardData = JSON.parse(rawDashboard);
+    if (!r.ok) {
+      return (lastScanStatus = { ok: false, fresh: false, reason: `http_${r.status}`, generatedDate: '' });
+    }
+    gist = await r.json();
   } catch (e) {
-    console.warn('刷新当日扫描器操作清单失败，暂用本地缓存数据', e);
+    console.warn('刷新当日扫描器操作清单失败', e);
+    return (lastScanStatus = { ok: false, fresh: false, reason: 'network', generatedDate: '' });
   }
+  const rawDashboard = gist.files?.['dashboard.json']?.content;
+  if (rawDashboard) dashboardData = JSON.parse(rawDashboard);
   const scannerOps = dashboardData?.decision?.operations || [];
   currentAiActions = scannerOps.length
     ? decisionOperationsToActions(scannerOps)
     : (extractQuickGuide((dashboardData?.ai || {}).text || '')?.actions || []);
+  const generatedDate = dashboardData?.generated_at || '';
+  const fresh = generatedDate.slice(0, 10) === today();
+  return (lastScanStatus = { ok: true, fresh, reason: fresh ? '' : 'stale_snapshot', generatedDate });
 }
 
 // ============================================================
@@ -756,6 +773,17 @@ function manualReasonOption() {
   };
 }
 
+function scanStatusReasonText(reason) {
+  return {
+    no_token: '未登录/无法读取数据源',
+    network: '网络请求失败',
+    stale_snapshot: '拿到的扫描数据不是今天的',
+  }[reason] || (reason && reason.startsWith('http_') ? `请求失败（${reason}）` : '数据未就绪');
+}
+
+// 三态：① 数据是今日的且匹配上 → 正常放行；② 数据是今日的但确无该代码/动作 → 允许人工补录；
+// ③ 数据没刷新成功/不是今日的 → 拦截，不能让用户在这种状态下被当成"确认无信号"而人工补录。
+// 2026-07-10、07-13 两次交易都是在③被误判成②才被逼走 MANUAL_BACKFILL，见 refreshScannerActions 注释。
 function fillReasonSelect(selectId, symbol, types, preferredRule = '') {
   const select = document.getElementById(selectId);
   if (!select) return;
@@ -767,8 +795,19 @@ function fillReasonSelect(selectId, symbol, types, preferredRule = '') {
   select.dataset.reasonTypes = JSON.stringify(normalizedTypes);
   select.dataset.preferredRule = preferredRule || '';
   select.dataset.manualOverride = 'false';
+  select.dataset.scanBlocked = 'false';
 
-  if (options.length) {
+  const scanUnreliable = !lastScanStatus.ok || !lastScanStatus.fresh;
+
+  if (scanUnreliable) {
+    select.disabled = true;
+    select.dataset.scanBlocked = 'true';
+    select.innerHTML = '<option value="">今日信号未确认，无法判断</option>';
+    if (status) {
+      status.className = 'reason-status reason-status-error';
+      status.textContent = `⚠️ 今日信号未确认（${scanStatusReasonText(lastScanStatus.reason)}${lastScanStatus.generatedDate ? '，数据日期 ' + lastScanStatus.generatedDate : ''}），请刷新页面重试，先别人工补录。`;
+    }
+  } else if (options.length) {
     select.disabled = false;
     select.innerHTML = options.map((item, idx) => {
       const selected = preferredRule && item.reason.rule_code === preferredRule ? ' selected' : (!preferredRule && idx === 0 ? ' selected' : '');
@@ -784,7 +823,7 @@ function fillReasonSelect(selectId, symbol, types, preferredRule = '') {
     if (status) {
       status.className = 'reason-status reason-status-error';
       status.textContent = symbol
-        ? '未匹配到当日扫描器操作，不能按方法论登记。'
+        ? '今日扫描器确无此代码的该动作，可转人工补录。'
         : '请先输入证券代码，以匹配当日扫描器操作。';
     }
   }
@@ -807,7 +846,10 @@ function toggleManualReason(selectId) {
     );
     return;
   }
-  if (!confirm('人工补录不计入方法论有效性统计。仅用于纠错或补历史，确认继续？')) return;
+  const confirmText = select.dataset.scanBlocked === 'true'
+    ? '今日信号未确认（数据没刷新到最新，不是确认无信号）。此时人工补录会漏记 AI 归因、污染方法论统计，强烈建议先刷新页面重试。确认仍要坚持人工补录？'
+    : '人工补录不计入方法论有效性统计。仅用于纠错或补历史，确认继续？';
+  if (!confirm(confirmText)) return;
   const item = manualReasonOption();
   select.disabled = false;
   select.dataset.manualOverride = 'true';
@@ -1541,6 +1583,7 @@ function applyBuyGuidance() {
 
 async function openDrawer() {
   await refreshScannerActions();
+  checkStaleBanner();
   document.getElementById('new-symbol').value = '';
   delete document.getElementById('new-symbol').dataset.fullCode;
   document.getElementById('new-qty').value = '';
@@ -1769,6 +1812,7 @@ async function saveCard(idx) {
 
 async function openOperationDialog(mode, idx, options = {}) {
   await refreshScannerActions();
+  checkStaleBanner();
   const dialog = document.getElementById('operation-dialog');
   const h = Number.isInteger(idx) && idx >= 0 ? holdingsData.holdings[idx] : null;
   document.getElementById('operation-mode').value = mode;
@@ -2002,6 +2046,22 @@ function setStatus(text, cls) {
   const el = document.getElementById('sync-status');
   el.textContent = text;
   el.className = 'topbar-status ' + cls;
+}
+
+const STALE_TAB_THRESHOLD_MS = 8 * 60 * 60 * 1000;
+let staleBannerDismissed = false;
+// 长期开着不刷新的标签页，内存里的 app.js 可能是几天前加载的旧版本，
+// 光靠 refreshScannerActions() 拉新数据救不回旧代码逻辑本身——提示用户整页刷新。
+function checkStaleBanner() {
+  const banner = document.getElementById('stale-banner');
+  if (!banner || staleBannerDismissed) return;
+  const stale = Date.now() - pageLoadedAt > STALE_TAB_THRESHOLD_MS;
+  banner.hidden = !stale;
+}
+function dismissStaleBanner() {
+  staleBannerDismissed = true;
+  const banner = document.getElementById('stale-banner');
+  if (banner) banner.hidden = true;
 }
 
 let toastTimer;

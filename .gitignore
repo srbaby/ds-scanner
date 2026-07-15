@@ -1,5 +1,6 @@
 # 本地私有协作规范，不进公开仓库
 CLAUDE.md
+AGENTS.md
 
 # 旧的无点前缀本地镜像文件夹，已被真正的 .github/ 取代
 github/

@@ -40,7 +40,7 @@ jobs:
 
       - name: 运行v3.1回归测试
         run: |
-          node js/test_app.js
+          npm run test:frontend
           PYTHONPATH=automation python -m unittest \
             automation/test_ds_scanner.py \
             automation/test_gemini_review.py \

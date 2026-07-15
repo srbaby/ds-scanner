@@ -44,6 +44,7 @@ jobs:
           PYTHONPATH=automation python -m unittest \
             automation/test_ds_scanner.py \
             automation/test_gemini_review.py \
+            automation/test_generate_dashboard.py \
             automation/test_send_report.py \
             automation/test_versioning.py \
             automation/test_observe.py \
@@ -83,4 +84,3 @@ jobs:
         if: always()
         run: |
           python -c "import json,sys; d=json.load(open('decision.json')); h=(d.get('portfolio') or {}).get('health','ok'); print('health=',h); sys.exit(1 if h!='ok' else 0)"
-

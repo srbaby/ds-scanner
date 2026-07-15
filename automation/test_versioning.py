@@ -11,7 +11,7 @@ class VersioningTests(unittest.TestCase):
     def test_version_manifest_is_v3(self):
         self.assertEqual(versioning.METHODOLOGY_VERSION, "v3.1")
         self.assertEqual(versioning.PROMPT_CONTRACT_VERSION, "v3.1")
-        self.assertEqual(versioning.DATA_SCHEMA_VERSION, "v3.1")
+        self.assertEqual(versioning.DATA_SCHEMA_VERSION, "v3.2")
 
     def test_key_documents_match_manifest(self):
         versioning.validate_document_versions()

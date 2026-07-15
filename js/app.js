@@ -1,19 +1,5 @@
-// 新增：利用腾讯接口跨境网络获取股票/ETF真实名称
-function fetchOnlineName(symbol, callback) {
-  const script = document.createElement('script');
-  script.src = `https://qt.gtimg.cn/q=${symbol.toLowerCase()}`;
-  script.onload = () => {
-    try {
-      const varName = `v_${symbol.toLowerCase()}`;
-      if (window[varName]) {
-        const parts = window[varName].split('~');
-        if (parts && parts[1]) callback(parts[1]); // parts[1] 就是中文名称
-      }
-    } catch (e) { console.error(e); }
-    script.remove();
-  };
-  document.body.appendChild(script);
-}
+import { GistClient, parseJson, parseJsonl as parseGistJsonl } from './api.js';
+import { actionPriority, dashboardIsFresh, sortHoldingsForExecution } from './decision.js';
 
 // ============================================================
 // ETF 池（与 ds_scanner.py 保持一致）
@@ -51,7 +37,7 @@ const OBSERVE_REF = 'main';
 const DEFAULT_VERSIONS = {
   methodology_version: 'v3.1',
   prompt_contract_version: 'v3.1',
-  data_schema_version: 'v3.1',
+  data_schema_version: 'v3.2',
 };
 
 // ============================================================
@@ -62,6 +48,12 @@ let versionData = { ...DEFAULT_VERSIONS };
 let executionEvents = [];
 let dataManifest = {};
 let gistRevision = '';
+let gistClient = null;
+let gistIndex = null;
+let gistFileContents = {};
+let reportData = '';
+let etfPoolData = {};
+let activeView = 'execute';
 let currentAiActions = [];
 let operationSaveInFlight = false;
 const editOpenState = new Set();
@@ -73,24 +65,12 @@ let pageLoadedAt = Date.now();
 // ============================================================
 // 初始化
 // ============================================================
-window.onload = async () => {
+window.addEventListener('load', async () => {
   TOKEN   = localStorage.getItem('ds_token') || '';
   GIST_ID = localStorage.getItem('ds_gist')  || '';
   document.getElementById('new-date').value = today();
   await loadVersionManifest();
   document.getElementById('app-version').textContent = versionData.methodology_version;
-  const brandRefresh = document.getElementById('brand-refresh');
-  if (brandRefresh) {
-    const trigger = () => location.reload();
-    brandRefresh.addEventListener('click', trigger);
-    brandRefresh.addEventListener('keydown', event => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        trigger();
-      }
-    });
-  }
-
   if (TOKEN && GIST_ID) {
     document.getElementById('input-token').value = TOKEN;
     document.getElementById('input-gist').value  = GIST_ID;
@@ -99,8 +79,7 @@ window.onload = async () => {
     loadData().then(() => {
       renderAll();
       renderDashboard(dashboardData);
-      renderObserver(statsData);
-      renderExecutionHistory();
+      renderExecutionHistory({ compact: true });
       setStatus('已同步', 'ok');
       document.getElementById('display-sync').textContent = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
     }).catch(e => {
@@ -112,7 +91,8 @@ window.onload = async () => {
       err.style.display = 'block';
     });
   }
-};
+  bindEvents();
+});
 
 function today() {
   return new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD
@@ -151,14 +131,14 @@ async function doAuth() {
   }
   localStorage.setItem('ds_token', TOKEN);
   localStorage.setItem('ds_gist',  GIST_ID);
+  gistClient = new GistClient({ token: TOKEN, gistId: GIST_ID });
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('main-screen').style.display = 'block';
   try {
     await loadData();
     renderAll();
     renderDashboard(dashboardData);
-    renderObserver(statsData);
-    renderExecutionHistory();
+    renderExecutionHistory({ compact: true });
     setStatus('已同步', 'ok');
     document.getElementById('display-sync').textContent = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
   } catch(e) {
@@ -175,34 +155,43 @@ async function doAuth() {
 // ============================================================
 async function loadData() {
   setStatus('加载中…', '');
-  const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
-    headers: { Authorization: `token ${TOKEN}` }
-  });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const gist = await r.json();
-  gistETag = r.headers.get('ETag');
+  gistClient = new GistClient({ token: TOKEN, gistId: GIST_ID });
+  const gist = await gistClient.index();
+  gistIndex = gist;
   gistRevision = gist.history?.[0]?.version || '';
+  const files = await gistClient.readFiles(gist, [
+    'holdings.json', 'dashboard.json', 'data_manifest.json', executionFileName(), 'etf_pool.json',
+  ]);
+  gistFileContents = { ...files };
 
-  const raw = gist.files?.['holdings.json']?.content;
+  const raw = files['holdings.json'];
   if (!raw) throw new Error('Gist 中没有 holdings.json');
   holdingsData = JSON.parse(raw);
   editOpenState.clear();
   if (!holdingsData.holdings) holdingsData.holdings = [];
   if (!holdingsData.cash_available) holdingsData.cash_available = 0;
 
-  const rawDashboard = gist.files?.['dashboard.json']?.content;
-  dashboardData = rawDashboard ? JSON.parse(rawDashboard) : null;
-
-  const rawStats = gist.files?.['stats.json']?.content;
-  statsData = rawStats ? JSON.parse(rawStats) : null;
-
-  const rawObserverRequest = gist.files?.['observer_request.json']?.content;
-  observerRequestData = rawObserverRequest ? JSON.parse(rawObserverRequest) : null;
-
-  const rawEvents = gist.files?.[executionFileName()]?.content || '';
+  dashboardData = parseJson(files['dashboard.json'], null);
+  etfPoolData = parseJson(files['etf_pool.json'], {})?.etfs || {};
+  const rawEvents = files[executionFileName()] || '';
   executionEvents = parseJsonl(rawEvents);
-  const rawManifest = gist.files?.['data_manifest.json']?.content;
-  dataManifest = rawManifest ? JSON.parse(rawManifest) : {};
+  dataManifest = parseJson(files['data_manifest.json'], {});
+  reportData = dashboardData?.report || '';
+}
+
+async function loadInsightData() {
+  if (!gistClient) return;
+  const gist = await gistClient.index();
+  gistIndex = gist;
+  const reportName = dashboardData?.report_file || 'report.txt';
+  const files = await gistClient.readFiles(gist, ['stats.json', 'observer_request.json', reportName]);
+  statsData = parseJson(files['stats.json'], null);
+  observerRequestData = parseJson(files['observer_request.json'], null);
+  reportData = files[reportName] || dashboardData?.report || '';
+  Object.assign(gistFileContents, files);
+  renderDashboard(dashboardData);
+  renderObserver(statsData);
+  renderExecutionHistory();
 }
 
 // 打开登记/操作弹窗前静默拉一次最新 dashboard.json，避免标签页开太久后
@@ -216,21 +205,14 @@ async function refreshScannerActions() {
   if (!TOKEN || !GIST_ID) {
     return (lastScanStatus = { ok: false, fresh: false, reason: 'no_token', generatedDate: '' });
   }
-  let gist;
   try {
-    const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
-      headers: { Authorization: `token ${TOKEN}` }
-    });
-    if (!r.ok) {
-      return (lastScanStatus = { ok: false, fresh: false, reason: `http_${r.status}`, generatedDate: '' });
-    }
-    gist = await r.json();
+    const gist = await gistClient.index();
+    const rawDashboard = await gistClient.readFile(gist, 'dashboard.json');
+    if (rawDashboard) dashboardData = JSON.parse(rawDashboard);
   } catch (e) {
     console.warn('刷新当日扫描器操作清单失败', e);
     return (lastScanStatus = { ok: false, fresh: false, reason: 'network', generatedDate: '' });
   }
-  const rawDashboard = gist.files?.['dashboard.json']?.content;
-  if (rawDashboard) dashboardData = JSON.parse(rawDashboard);
   const scannerOps = dashboardData?.decision?.operations || [];
   currentAiActions = scannerOps.length
     ? decisionOperationsToActions(scannerOps)
@@ -251,26 +233,12 @@ async function saveData(extraFiles = {}, successMessage = '✅ 已保存') {
     // （400 "Conditional request headers are not allowed in unsafe requests unless
     // supported by the endpoint"）。之前加 If-Match 是想做乐观并发校验，但这个接口不支持，
     // 会导致所有写入（买入/加仓/减仓/清仓/改资金）100%保存失败，因此不发送该头。
-    const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `token ${TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ files: {
-        'holdings.json': { content },
-        ...Object.fromEntries(Object.entries(extraFiles).map(([name, value]) => [
-          name, { content: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }
-        ])),
-      } })
-    });
-    if (!r.ok) {
-      const detail = await r.text().catch(() => '');
-      throw new Error(`HTTP ${r.status}${detail ? ' ' + detail.slice(0, 200) : ''}`);
-    }
-    gistETag = r.headers.get('ETag');
-    const updated = await r.json().catch(() => ({}));
+    const updated = await gistClient.patchFiles({ 'holdings.json': content, ...extraFiles });
     gistRevision = updated.history?.[0]?.version || gistRevision;
+    gistFileContents['holdings.json'] = content;
+    Object.entries(extraFiles).forEach(([name, value]) => {
+      gistFileContents[name] = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    });
     setStatus('已同步', 'ok');
     document.getElementById('display-sync').textContent =
       new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
@@ -285,10 +253,7 @@ async function saveData(extraFiles = {}, successMessage = '✅ 已保存') {
 }
 
 function parseJsonl(raw) {
-  return String(raw || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-    .map(line => {
-      try { return JSON.parse(line); } catch (e) { return null; }
-    }).filter(Boolean);
+  return parseGistJsonl(raw);
 }
 
 function dumpJsonl(rows) {
@@ -430,28 +395,17 @@ function updateDataManifest(events) {
   };
 }
 
-async function assertNoRemoteChange() {
-  const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
-    headers: { Authorization: `token ${TOKEN}` },
-    cache: 'no-store',
-  });
-  if (!r.ok) throw new Error(`并发检查失败 HTTP ${r.status}`);
-  const gist = await r.json();
-  const remoteRevision = gist.history?.[0]?.version || '';
-  if (gistRevision && remoteRevision && gistRevision !== remoteRevision) {
-    throw new Error('Gist 已被其他任务更新，请刷新页面后重试');
-  }
+async function assertNoRemoteChange(filenames) {
+  const gist = await gistClient.index();
+  const remote = await gistClient.readFiles(gist, filenames);
+  const changed = filenames.find(name => (gistFileContents[name] || '') !== (remote[name] || ''));
+  if (changed) throw new Error(`${changed} 已被其他设备更新，请刷新后重试`);
 }
 
 async function verifyEventWritten(eventId) {
-  const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
-    headers: { Authorization: `token ${TOKEN}` },
-    cache: 'no-store',
-  });
-  if (!r.ok) throw new Error(`写后校验失败 HTTP ${r.status}`);
-  const gist = await r.json();
+  const gist = await gistClient.index();
   gistRevision = gist.history?.[0]?.version || gistRevision;
-  const raw = gist.files?.[executionFileName()]?.content || '';
+  const raw = await gistClient.readFile(gist, executionFileName()) || '';
   if (!parseJsonl(raw).some(row => row.event_id === eventId)) {
     throw new Error('写后校验未找到事件ID，请刷新确认');
   }
@@ -466,7 +420,7 @@ async function persistExecution(event, beforeData, afterData) {
   const previousEvents = deepClone(executionEvents);
   const previousManifest = deepClone(dataManifest);
   try {
-    await assertNoRemoteChange();
+    await assertNoRemoteChange(['holdings.json', executionFileName()]);
     executionEvents = [...executionEvents, event];
     holdingsData = afterData;
     updateDataManifest(executionEvents);
@@ -507,7 +461,10 @@ async function persistExecution(event, beforeData, afterData) {
 // 渲染
 // ============================================================
 function renderAll() {
-  const active = holdingsData.holdings.filter(h => h.qty > 0);
+  const active = sortHoldingsForExecution(
+    holdingsData.holdings.filter(h => h.qty > 0),
+    holding => scannerDashboardIsFresh() ? scannerOperationForSymbol(holding.symbol) : null,
+  );
   document.getElementById('display-cash').textContent =
     '¥ ' + Number(holdingsData.cash_available).toLocaleString('zh-CN', {minimumFractionDigits:2, maximumFractionDigits:2});
   document.getElementById('display-count').textContent = active.length;
@@ -522,7 +479,7 @@ function renderAll() {
   list.innerHTML = active.map((h, idx) => {
     const fullIdx = holdingsData.holdings.indexOf(h);
     const digits = h.symbol.replace(/\D/g, '');
-    const poolName = CODE_MAP[digits]?.name;
+    const poolName = CODE_MAP[digits]?.name || etfPoolData[h.symbol]?.name || etfPoolData[h.symbol]?.display_name;
     const name = poolName || h.name || h.symbol;
     const displayCode = h.symbol.replace(/^(sh|sz)/, '');
     const prefix = h.symbol.startsWith('sh') ? 'SH' : 'SZ';
@@ -534,21 +491,29 @@ function renderAll() {
     const scanAction = scan.available && scan.action && ['BUY', 'ADD', 'REDUCE', 'SELL'].includes(scan.action)
       ? ` · ${actionLabel(scan.action)}${scan.action === 'SELL' ? '（清仓）' : ''}`
       : '';
+    const guidance = scan.guidance;
+    const recommendation = scan.available && guidance?.recommended_shares > 0
+      ? `<div class="card-recommendation"><span>${scan.action === 'SELL' ? '清仓：全部卖出' : actionLabel(scan.action)}</span><strong>${Number(guidance.recommended_shares).toLocaleString()} 份</strong><small>约 ¥${Number(guidance.estimated_amount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</small></div>`
+      : `<div class="card-recommendation is-muted">${scan.available ? '今日无需调整' : '等待今日扫描确认'}</div>`;
+    const primaryAction = scan.available && ['ADD', 'REDUCE', 'SELL'].includes(scan.action)
+      ? `<button class="card-primary-action ${scan.action === 'SELL' ? 'is-sell' : ''}" data-action="recommended-operation" data-index="${fullIdx}">${scan.action === 'SELL' ? '按建议清仓' : '按建议登记'}</button>`
+      : '';
     const isOpen = editOpenState.has(fullIdx);
     const openClass = isOpen ? ' is-open' : '';
 
     return `
     <div class="holding-card${openClass}" id="card-${fullIdx}">
-      <div class="card-main" onclick="toggleEdit(${fullIdx})">
+      <div class="card-main" data-action="toggle-position" data-index="${fullIdx}">
         <div class="card-code-cell">
           <div class="card-code">${displayCode}</div>
           <div class="card-exch">${prefix}</div>
         </div>
-        <div class="card-info">
+          <div class="card-info">
           <div class="card-title-row">
             <div class="card-name" id="name-${fullIdx}">${name}</div>
             ${reduced}
           </div>
+          ${recommendation}
           <div class="card-meta">${h.qty.toLocaleString()} 份 · 成本 ${h.cost} · ${h.buy_date} · ${positionText}${scanAction}</div>
         </div>
         <div class="card-col card-col-qty">${h.qty.toLocaleString()}</div>
@@ -574,34 +539,22 @@ function renderAll() {
           <input type="date" id="ed-${fullIdx}" value="${h.buy_date}">
         </div>
         <div class="edit-save-row">
-          <button class="btn btn-primary edit-save-btn" onclick="saveCard(${fullIdx})">确认更正</button>
-          <button class="btn btn-ghost edit-cancel-btn" onclick="toggleEdit(${fullIdx})">取消</button>
+          <button class="btn btn-primary edit-save-btn" data-action="save-position" data-index="${fullIdx}">确认更正</button>
+          <button class="btn btn-ghost edit-cancel-btn" data-action="toggle-position" data-index="${fullIdx}">取消</button>
         </div>
         <div class="edit-action-row">
-          <button class="card-btn card-btn-add" onclick="openAdd(${fullIdx})">加仓</button>
-          <button class="card-btn card-btn-reduce" onclick="openReduce(${fullIdx})">减仓</button>
-          <button class="card-btn card-btn-close" onclick="closePosition(${fullIdx})">清仓</button>
+          ${primaryAction}
+          <button class="card-btn card-btn-add" data-action="add-position" data-index="${fullIdx}">加仓</button>
+          <button class="card-btn card-btn-reduce" data-action="reduce-position" data-index="${fullIdx}">减仓</button>
+          <button class="card-btn card-btn-close" data-action="close-position" data-index="${fullIdx}">清仓</button>
         </div>
       </div>
     </div>`;
   }).join('');
-
-  // ─── 异步补全池外名称（仅对无名称的标的触发 JSONP） ───
-  active.forEach(h => {
-    if (CODE_MAP[h.symbol.replace(/\D/g, '')]?.name || h.name) return;
-    const fullIdx = holdingsData.holdings.indexOf(h);
-    fetchOnlineName(h.symbol, (onlineName) => {
-      const nameEl = document.getElementById(`name-${fullIdx}`);
-      if (nameEl && onlineName) {
-        nameEl.textContent = onlineName;
-        h.name = onlineName;
-      }
-    });
-  });
 } // <─── 注意！这个大括号必须在最后面，用来闭合 renderAll 函数
 
 function scannerDashboardIsFresh() {
-  return !!dashboardData?.generated_at && dashboardData.generated_at.slice(0, 10) === today();
+  return dashboardIsFresh(dashboardData, today());
 }
 
 function scannerOperationForSymbol(symbol) {
@@ -1220,7 +1173,7 @@ function renderDashboard(data) {
     reportSection.open = !hasDecision;
   }
 
-  reportBody.innerHTML = renderMarkdown(data.report || '(无数据)');
+  reportBody.innerHTML = renderMarkdown(reportData || data.report || '原始报告将在打开洞察页后按需读取。');
 }
 
 function escapeHtml(s) {
@@ -1228,6 +1181,10 @@ function escapeHtml(s) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function escapeAttr(s) {
+  return escapeHtml(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function renderMarkdown(text) {
@@ -1697,7 +1654,7 @@ function renderBuyGuidance() {
     （${Number(guidance.recommended_lots)} 手）</strong><br>
     扫描参考价 ${Number(guidance.reference_price).toFixed(3)}，
     预计占用 ¥${Number(guidance.estimated_amount).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}
-    <div><button type="button" class="reason-manual-btn" onclick="applyBuyGuidance()">填入建议</button></div>
+    <div><button type="button" class="reason-manual-btn" data-action="apply-buy-guidance">填入建议</button></div>
     <small>实际成交价、费用和可用资金以券商为准</small>`;
 }
 
@@ -1759,10 +1716,10 @@ function onSymbolInput(val) {
   if (matches.length === 0) { list.classList.remove('open'); return; }
 
   list.innerHTML = matches.map(([code, name]) =>
-    `<div class="suggest-item" onclick="selectSuggest('${code}','${name}')">
+    `<button type="button" class="suggest-item" data-action="select-suggest" data-code="${escapeAttr(code)}" data-name="${escapeAttr(name)}">
       <span class="suggest-code">${code}</span>
       <span class="suggest-name">${name}</span>
-    </div>`
+    </button>`
   ).join('');
   list.classList.add('open');
 }
@@ -2031,7 +1988,7 @@ function renderOperationGuidance() {
   }
   const verb = guidance.side === 'SELL' ? (mode === 'SELL' ? '全部卖出' : '卖出') : '买入';
   const position = actionPositionLabel(action);
-  preview.innerHTML = `<strong>扫描器执行参考</strong><br>${escapeHtml(position)}<br>${verb} <strong>${Number(guidance.recommended_shares).toLocaleString()} 份（${Number(guidance.recommended_lots).toLocaleString()} 手）</strong>，参考价 ${Number(guidance.reference_price).toFixed(3)}，预计金额 ¥${Number(guidance.estimated_amount).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}<div><button type="button" class="reason-manual-btn" onclick="applyOperationGuidance()">填入建议</button></div><small>实际成交价、费用和可用资金以券商为准</small>`;
+  preview.innerHTML = `<strong>扫描器执行参考</strong><br>${escapeHtml(position)}<br>${verb} <strong>${Number(guidance.recommended_shares).toLocaleString()} 份（${Number(guidance.recommended_lots).toLocaleString()} 手）</strong>，参考价 ${Number(guidance.reference_price).toFixed(3)}，预计金额 ¥${Number(guidance.estimated_amount).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}<div><button type="button" class="reason-manual-btn" data-action="apply-operation-guidance">填入建议</button></div><small>实际成交价、费用和可用资金以券商为准</small>`;
 }
 
 function applyOperationGuidance() {
@@ -2184,8 +2141,8 @@ function renderExecutionHistory() {
       : `资金 ${Number(event.cash_before || 0).toFixed(2)} → ${Number(event.cash_after || 0).toFixed(2)}`;
     const canCorrectReason = ['BUY', 'ADD', 'REDUCE', 'SELL'].includes(event.event_type);
     const actions = display.status === '已撤销' ? '' : `
-      ${canCorrectReason ? `<button onclick="correctEventReason('${event.event_id}')">更正原因</button>` : ''}
-      ${canReverseEvent(event) ? `<button class="danger" onclick="reverseExecution('${event.event_id}')">撤销登记</button>` : ''}
+      ${canCorrectReason ? `<button data-action="correct-event" data-event-id="${escapeAttr(event.event_id)}">更正原因</button>` : ''}
+      ${canReverseEvent(event) ? `<button class="danger" data-action="reverse-event" data-event-id="${escapeAttr(event.event_id)}">撤销登记</button>` : ''}
     `;
     return `<div class="execution-row execution-${display.cls}">
       <div class="execution-row-main">
@@ -2201,6 +2158,16 @@ function renderExecutionHistory() {
       </div>
     </div>`;
   }).join('');
+  renderRecentExecutions(baseEvents);
+}
+
+function renderRecentExecutions(baseEvents = executionEvents.filter(row => !['CORRECT_REASON', 'REVERSE_EVENT'].includes(row.event_type))) {
+  const list = document.getElementById('recent-execution-list');
+  if (!list) return;
+  const recent = [...baseEvents].reverse().slice(0, 3);
+  list.innerHTML = recent.length
+    ? recent.map(event => `<div class="recent-execution-row"><strong>${escapeHtml(actionLabel(event.event_type))}</strong><span>${escapeHtml(event.symbol || '可用资金')}</span><small>${escapeHtml(event.occurred_at || '')}</small></div>`).join('')
+    : '暂无操作记录';
 }
 
 function correctEventReason(eventId) {
@@ -2258,6 +2225,106 @@ function downloadHoldings() {
   a.download = 'holdings.json';
   a.click();
   URL.revokeObjectURL(url);
+}
+
+async function openRecommended(idx) {
+  const holding = holdingsData.holdings[idx];
+  const operation = holding && scannerOperationForSymbol(holding.symbol);
+  const type = normalizeActionType(operation?.action);
+  if (!holding || !['ADD', 'REDUCE', 'SELL'].includes(type) || !scannerDashboardIsFresh()) {
+    toast('今日扫描建议不可用，请刷新后再试', 'error');
+    return;
+  }
+  await openOperationDialog(type, idx, {
+    title: `${type === 'SELL' ? '清仓' : actionLabel(type)} ${holding.symbol}`,
+    qty: type === 'SELL' ? 0 : holding.qty,
+    cost: holding.cost,
+    cash: holdingsData.cash_available,
+    reasonTypes: [type],
+  });
+  applyOperationGuidance();
+}
+
+async function setActiveView(view) {
+  const next = view === 'insights' ? 'insights' : 'execute';
+  activeView = next;
+  const execute = document.getElementById('execute-view');
+  const insights = document.getElementById('insights-view');
+  const history = document.getElementById('execution-history-view');
+  if (execute) execute.hidden = next !== 'execute';
+  if (insights) insights.hidden = next !== 'insights';
+  if (history) history.hidden = next !== 'insights';
+  document.querySelectorAll('[data-action="switch-view"]').forEach(button => {
+    const active = button.dataset.view === next;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  if (next === 'insights' && !statsData) {
+    try { await loadInsightData(); }
+    catch (error) { toast(`洞察数据加载失败：${error.message}`, 'error'); }
+  }
+}
+
+function clearCredentials() {
+  localStorage.removeItem('ds_token');
+  localStorage.removeItem('ds_gist');
+  location.reload();
+}
+
+function bindEvents() {
+  const brandRefresh = document.getElementById('brand-refresh');
+  if (brandRefresh) {
+    const refresh = () => location.reload();
+    brandRefresh.addEventListener('click', refresh);
+    brandRefresh.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); refresh(); }
+    });
+  }
+  document.addEventListener('click', async event => {
+    const target = event.target.closest('[data-action]');
+    if (!target) return;
+    const { action, index, eventId, view } = target.dataset;
+    if (action === 'reload') location.reload();
+    else if (action === 'dismiss-stale') dismissStaleBanner();
+    else if (action === 'clear-credentials') clearCredentials();
+    else if (action === 'auth') doAuth();
+    else if (action === 'toggle-cash') toggleCashEdit();
+    else if (action === 'save-cash') saveCash();
+    else if (action === 'confirm-observation') confirmObservation();
+    else if (action === 'download-holdings') downloadHoldings();
+    else if (action === 'open-drawer') openDrawer();
+    else if (action === 'close-drawer') closeDrawer();
+    else if (action === 'switch-view') setActiveView(view);
+    else if (action === 'toggle-position') toggleEdit(Number(index));
+    else if (action === 'save-position') saveCard(Number(index));
+    else if (action === 'add-position') openAdd(Number(index));
+    else if (action === 'reduce-position') openReduce(Number(index));
+    else if (action === 'close-position') closePosition(Number(index));
+    else if (action === 'recommended-operation') openRecommended(Number(index));
+    else if (action === 'apply-operation-guidance') applyOperationGuidance();
+    else if (action === 'apply-buy-guidance') applyBuyGuidance();
+    else if (action === 'select-suggest') selectSuggest(target.dataset.code, target.dataset.name);
+    else if (action === 'correct-event') correctEventReason(eventId);
+    else if (action === 'reverse-event') reverseExecution(eventId);
+    else if (action === 'toggle-manual-new') toggleManualReason('new-reason');
+    else if (action === 'toggle-manual-operation') toggleManualReason('operation-reason');
+    else if (action === 'add-holding') addHolding();
+    else if (action === 'confirm-operation') confirmOperationDialog();
+    else if (action === 'close-operation') closeOperationDialog();
+  });
+  document.addEventListener('input', event => {
+    if (event.target.dataset.input === 'symbol') onSymbolInput(event.target.value);
+    if (event.target.dataset.input === 'new-preview') updateNewPreview();
+    if (event.target.dataset.input === 'new-cost') { updateNewPreview(); renderBuyGuidance(); }
+  });
+  document.addEventListener('change', event => {
+    if (event.target.dataset.input === 'new-reason') renderBuyGuidance();
+    if (event.target.dataset.input === 'operation-reason') syncOperationModeFromReason();
+  });
+  document.querySelector('#operation-dialog form')?.addEventListener('submit', event => {
+    event.preventDefault();
+    confirmOperationDialog();
+  });
 }
 
 // ============================================================

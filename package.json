@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:frontend": "node js/test_app.js && node js/test_api.js"
+  }
+}

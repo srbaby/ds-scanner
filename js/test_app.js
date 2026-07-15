@@ -1,11 +1,17 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const indexHtml = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+assert.doesNotMatch(indexHtml, /\son(?:click|input|change|submit)=/);
+assert.match(indexHtml, /type="module" src="js\/app\.js/);
 
 const context = {
   console,
-  window: { crypto: { randomUUID: () => 'test-uuid' } },
+  window: { crypto: { randomUUID: () => 'test-uuid' }, addEventListener() {} },
   document: {
     createElement: () => ({ remove() {} }),
     body: { appendChild() {} },
@@ -23,7 +29,8 @@ const context = {
 };
 vm.createContext(context);
 vm.runInContext(
-  fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8'),
+  fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8')
+    .replace(/^import .*;\n/gm, ''),
   context,
   { filename: 'app.js' },
 );

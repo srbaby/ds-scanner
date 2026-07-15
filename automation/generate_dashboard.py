@@ -56,6 +56,7 @@ GIST_ID = os.environ.get("DS_SCANNER_GIST_ID", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 DASHBOARD_FILE = "dashboard.json"
+REPORT_FILE = "report.txt"
 DECISION_FILE = "decision.json"
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "none").strip().lower()
 
@@ -111,11 +112,13 @@ def _gist_headers():
     return {"Content-Type": "application/json"}
 
 
-def write_dashboard(data: dict) -> bool:
-    """始终写本地运行时副本，再写入 Gist；返回是否写入 Gist 成功。"""
+def write_dashboard(data: dict, report_text: str) -> bool:
+    """发布轻量决策看板与独立原始报告，避免 report 重复嵌入 dashboard。"""
     content = json.dumps(data, ensure_ascii=False, indent=2)
     with open(DASHBOARD_FILE, "w", encoding="utf-8") as f:
         f.write(content)
+    with open(REPORT_FILE, "w", encoding="utf-8") as f:
+        f.write(report_text)
     print(f"✅ {DASHBOARD_FILE} 已生成本地运行时副本")
 
     if not GIST_ID or not GITHUB_TOKEN:
@@ -126,7 +129,10 @@ def write_dashboard(data: dict) -> bool:
         r = requests.patch(
             f"https://api.github.com/gists/{GIST_ID}",
             headers=_gist_headers(),
-            data=json.dumps({"files": {DASHBOARD_FILE: {"content": content}}}),
+            data=json.dumps({"files": {
+                DASHBOARD_FILE: {"content": content},
+                REPORT_FILE: {"content": report_text},
+            }}),
             proxies=PROXIES,
             timeout=15,
         )
@@ -141,27 +147,15 @@ def write_dashboard(data: dict) -> bool:
     return False
 
 
-def main():
-    validate_document_versions()
-    with open("report.txt", "r", encoding="utf-8") as f:
-        report_text = f.read()
-    with open(DECISION_FILE, "r", encoding="utf-8") as f:
-        decision = json.load(f)
-
-    provider, result = call_ai_audit(report_text, decision)
-    if not result.get("enabled", True):
-        print("ℹ️ 每日AI审计已停用，直接发布扫描器权威决策")
-    elif result["ok"]:
-        print(f"✅ {provider} 审计完成")
-    else:
-        print(f"⚠️ {provider} 审计失败（扫描器决策仍有效）: {result['error']}")
-
-    data = {
+def build_dashboard(report_text: str, decision: dict, provider: str, result: dict) -> dict:
+    """Create the front-end contract without duplicating the raw report."""
+    return {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "methodology_version": METHODOLOGY_VERSION,
         "prompt_contract_version": PROMPT_CONTRACT_VERSION,
         "data_schema_version": DATA_SCHEMA_VERSION,
-        "report": report_text,
+        "report_file": REPORT_FILE,
+        "report_available": bool(report_text),
         "decision": decision,
         "audit": {
             "provider": provider,
@@ -182,10 +176,26 @@ def main():
         },
         "policy_research": load_policy_research(),
     }
-    write_dashboard(data)
+
+
+def main():
+    validate_document_versions()
+    with open("report.txt", "r", encoding="utf-8") as f:
+        report_text = f.read()
+    with open(DECISION_FILE, "r", encoding="utf-8") as f:
+        decision = json.load(f)
+
+    provider, result = call_ai_audit(report_text, decision)
+    if not result.get("enabled", True):
+        print("ℹ️ 每日AI审计已停用，直接发布扫描器权威决策")
+    elif result["ok"]:
+        print(f"✅ {provider} 审计完成")
+    else:
+        print(f"⚠️ {provider} 审计失败（扫描器决策仍有效）: {result['error']}")
+
+    data = build_dashboard(report_text, decision, provider, result)
+    write_dashboard(data, report_text)
 
 
 if __name__ == "__main__":
     main()
-
-

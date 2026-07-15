@@ -4,7 +4,7 @@
         <meta charset="UTF-8" />
         <meta
             name="viewport"
-            content="width=device-width, initial-scale=1.0, maximum-scale=1.0"
+            content="width=device-width, initial-scale=1.0"
         />
         <link rel="icon" href="favicon.png" />
         <link rel="apple-touch-icon" href="favicon.png" />
@@ -20,8 +20,8 @@
              不会随时间自动刷新；登记操作时点"刷新"重新拉取即可，不需要整页重载 -->
         <div class="stale-banner" id="stale-banner" hidden>
             页面已打开较久，登记前建议刷新页面以确保拿到最新扫描数据。
-            <button type="button" onclick="location.reload()">立即刷新</button>
-            <button type="button" onclick="dismissStaleBanner()">知道了</button>
+            <button type="button" data-action="reload">立即刷新</button>
+            <button type="button" data-action="dismiss-stale">知道了</button>
         </div>
 
         <!-- 顶部栏 -->
@@ -31,7 +31,10 @@
                 <div class="topbar-title">Stock X</div>
                 <div class="topbar-version" id="app-version">v3.1</div>
             </div>
-            <div class="topbar-status" id="sync-status">未连接</div>
+            <div class="topbar-actions">
+                <button class="topbar-clear" data-action="clear-credentials" title="清除本机连接信息">清除连接</button>
+                <div class="topbar-status" id="sync-status">未连接</div>
+            </div>
         </div>
 
         <!-- 认证界面 -->
@@ -60,7 +63,7 @@
                     autocomplete="off"
                 />
             </div>
-            <button class="btn btn-primary" onclick="doAuth()">连接</button>
+            <button class="btn btn-primary" data-action="auth">连接</button>
             <div class="auth-error" id="auth-err"></div>
         </div>
 
@@ -75,7 +78,7 @@
                             <div class="overview-cash" id="display-cash">—</div>
                             <button
                                 class="cash-edit-btn"
-                                onclick="toggleCashEdit()"
+                                data-action="toggle-cash"
                                 title="编辑"
                             >
                                 ✎
@@ -106,21 +109,26 @@
                     />
                     <button
                         class="btn btn-primary btn-cash-save"
-                        onclick="saveCash()"
+                        data-action="save-cash"
                     >
                         保存
                     </button>
                     <button
                         class="btn btn-ghost btn-cash-cancel"
-                        onclick="toggleCashEdit()"
+                        data-action="toggle-cash"
                     >
                         取消
                     </button>
                 </div>
             </div>
 
-            <!-- 快速操作指引 + AI分析（默认折叠） + 原始扫描数据（默认折叠） -->
-            <div class="max-w">
+            <nav class="view-switch max-w" aria-label="页面视图">
+                <button class="view-switch-btn is-active" data-action="switch-view" data-view="execute" aria-pressed="true">今日执行</button>
+                <button class="view-switch-btn" data-action="switch-view" data-view="insights" aria-pressed="false">洞察与记录</button>
+            </nav>
+
+            <!-- 洞察内容默认不挤占每日执行入口 -->
+            <div class="max-w app-view" id="insights-view" hidden>
                 <section class="quick-guide" id="quick-guide" hidden>
                     <div class="quick-guide-head">
                         <div class="quick-guide-title">快速操作指引</div>
@@ -180,7 +188,7 @@
                         <button
                             class="observer-confirm-btn"
                             id="observer-confirm-btn"
-                            onclick="confirmObservation()"
+                            data-action="confirm-observation"
                             title="当前持仓和资金已补录完成"
                         >
                             确认观察
@@ -198,14 +206,14 @@
             </div>
 
             <!-- 持仓列表 -->
-            <div class="max-w">
+            <div class="max-w app-view" id="execute-view">
                 <div class="section-header">
                     <div class="section-title">ACTIVE POSITIONS</div>
                     <div class="section-actions">
                         <div class="badge" id="holdings-badge">0</div>
                         <button
                             class="json-download-btn"
-                            onclick="downloadHoldings()"
+                            data-action="download-holdings"
                             title="下载 holdings.json"
                         >
                             ↓ JSON
@@ -238,10 +246,17 @@
                         </div>
                     </div>
                 </div>
+                <section class="recent-execution" id="recent-execution">
+                    <div class="recent-execution-head">
+                        <div>最近操作</div>
+                        <button data-action="switch-view" data-view="insights">查看全部</button>
+                    </div>
+                    <div id="recent-execution-list" class="recent-execution-list">暂无操作记录</div>
+                </section>
             </div>
 
             <!-- 操作流水：放在页面内容最底部，避免挤占日常操作入口 -->
-            <div class="max-w">
+            <div class="max-w app-view" id="execution-history-view" hidden>
                 <section class="execution-panel">
                     <div class="execution-head">
                         <div>
@@ -263,7 +278,7 @@
             <div class="fab-area">
                 <button
                     class="fab"
-                    onclick="openDrawer()"
+                    data-action="open-drawer"
                     title="买入建仓"
                     aria-label="买入建仓"
                 >
@@ -276,7 +291,7 @@
         <div
             class="drawer-overlay"
             id="drawer-overlay"
-            onclick="closeDrawer()"
+            data-action="close-drawer"
         ></div>
         <div class="drawer" id="drawer">
             <div class="drawer-handle"></div>
@@ -289,7 +304,7 @@
                         id="new-symbol"
                         placeholder="如 512480"
                         inputmode="numeric"
-                        oninput="onSymbolInput(this.value)"
+                        data-input="symbol"
                         autocomplete="off"
                     />
                     <div class="suggest-list" id="suggest-list"></div>
@@ -303,7 +318,7 @@
                             placeholder="100"
                             inputmode="numeric"
                             step="100"
-                            oninput="updateNewPreview()"
+                            data-input="new-preview"
                         />
                     </div>
                     <div class="edit-field">
@@ -314,7 +329,7 @@
                             placeholder="1.000"
                             inputmode="decimal"
                             step="0.001"
-                            oninput="updateNewPreview(); renderBuyGuidance()"
+                            data-input="new-cost"
                         />
                     </div>
                 </div>
@@ -324,10 +339,10 @@
                 </div>
                 <div>
                     <div class="field-label">操作依据</div>
-                    <select id="new-reason" onchange="renderBuyGuidance()"></select>
+                    <select id="new-reason" data-input="new-reason"></select>
                     <div class="reason-control">
                         <div class="reason-status" id="new-reason-status"></div>
-                        <button type="button" class="reason-manual-btn" id="new-reason-manual" onclick="toggleManualReason('new-reason')">
+                        <button type="button" class="reason-manual-btn" id="new-reason-manual" data-action="toggle-manual-new">
                             转人工补录
                         </button>
                     </div>
@@ -343,7 +358,7 @@
                         placeholder="输入操作后的可用资金"
                         inputmode="decimal"
                         step="0.01"
-                        oninput="updateNewPreview()"
+                        data-input="new-preview"
                     />
                 </div>
                 <div class="operation-preview" id="new-preview">
@@ -352,13 +367,13 @@
                 <div class="drawer-actions">
                     <button
                         class="btn btn-primary drawer-confirm-btn"
-                        onclick="addHolding()"
+                        data-action="add-holding"
                     >
                         确认买入
                     </button>
                     <button
                         class="btn btn-ghost drawer-cancel-btn"
-                        onclick="closeDrawer()"
+                        data-action="close-drawer"
                     >
                         取消
                     </button>
@@ -368,7 +383,7 @@
 
         <!-- 减仓 / 清仓 / 更正操作 -->
         <dialog class="operation-dialog" id="operation-dialog">
-            <form method="dialog" onsubmit="return false;">
+            <form method="dialog">
                 <div class="drawer-title" id="operation-dialog-title">登记操作</div>
                 <input type="hidden" id="operation-index" />
                 <input type="hidden" id="operation-mode" />
@@ -387,18 +402,18 @@
                 </div>
                 <div>
                     <div class="field-label">操作依据</div>
-                    <select id="operation-reason" onchange="syncOperationModeFromReason()"></select>
+                    <select id="operation-reason" data-input="operation-reason"></select>
                     <div class="reason-control">
                         <div class="reason-status" id="operation-reason-status"></div>
-                        <button type="button" class="reason-manual-btn" id="operation-reason-manual" onclick="toggleManualReason('operation-reason')">
+                        <button type="button" class="reason-manual-btn" id="operation-reason-manual" data-action="toggle-manual-operation">
                             转人工补录
                         </button>
                     </div>
                 </div>
                 <div class="operation-preview" id="operation-preview"></div>
                 <div class="drawer-actions">
-                    <button class="btn btn-primary drawer-confirm-btn" onclick="confirmOperationDialog()">确认登记</button>
-                    <button class="btn btn-ghost drawer-cancel-btn" onclick="closeOperationDialog()">取消</button>
+                    <button type="button" class="btn btn-primary drawer-confirm-btn" data-action="confirm-operation">确认登记</button>
+                    <button type="button" class="btn btn-ghost drawer-cancel-btn" data-action="close-operation">取消</button>
                 </div>
             </form>
         </dialog>
@@ -406,6 +421,6 @@
         <!-- ?v= 每次改 js/app.js 后手动递增，绕过 max-age=600 的 HTTP 缓存，
              确保新访问/整页刷新能拿到最新逻辑（不解决"标签页开太久不刷新"，那个由
              stale-banner + pageLoadedAt 8小时检测兜底，见 js/app.js） -->
-        <script src="js/app.js?v=20260715a"></script>
+        <script type="module" src="js/app.js?v=20260715b"></script>
     </body>
 </html>

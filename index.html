@@ -129,15 +129,6 @@
 
             <!-- 洞察内容默认不挤占每日执行入口 -->
             <div class="max-w app-view" id="insights-view" hidden>
-                <section class="quick-guide" id="quick-guide" hidden>
-                    <div class="quick-guide-head">
-                        <div class="quick-guide-title">快速操作指引</div>
-                        <div class="quick-guide-meta" id="quick-guide-meta">
-                            —
-                        </div>
-                    </div>
-                    <div class="quick-guide-body" id="quick-guide-body"></div>
-                </section>
                 <section class="policy-watch" id="policy-watch" hidden>
                     <div class="policy-watch-head">
                         <div class="policy-watch-title-row">
@@ -207,6 +198,15 @@
 
             <!-- 持仓列表 -->
             <div class="max-w app-view" id="execute-view">
+                <section class="quick-guide" id="quick-guide" hidden>
+                    <div class="quick-guide-head">
+                        <div class="quick-guide-title">快速操作指引</div>
+                        <div class="quick-guide-meta" id="quick-guide-meta">
+                            —
+                        </div>
+                    </div>
+                    <div class="quick-guide-body" id="quick-guide-body"></div>
+                </section>
                 <div class="section-header">
                     <div class="section-title">ACTIVE POSITIONS</div>
                     <div class="section-actions">
@@ -421,6 +421,6 @@
         <!-- ?v= 每次改 js/app.js 后手动递增，绕过 max-age=600 的 HTTP 缓存，
              确保新访问/整页刷新能拿到最新逻辑（不解决"标签页开太久不刷新"，那个由
              stale-banner + pageLoadedAt 8小时检测兜底，见 js/app.js） -->
-        <script type="module" src="js/app.js?v=20260715c"></script>
+        <script type="module" src="js/app.js?v=20260715d"></script>
     </body>
 </html>

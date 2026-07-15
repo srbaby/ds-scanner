@@ -51,6 +51,33 @@ class ScannerDecisionTests(unittest.TestCase):
         self.assertEqual(guidance["recommended_lots"], 82)
         self.assertEqual(guidance["estimated_amount"], 19089.6)
 
+    def test_target_execution_guidance_sells_all_for_zero_target(self):
+        guidance = ds_scanner.calculate_target_execution_guidance(
+            total_asset=194432.7,
+            current_market_value=50720.0,
+            target_position_pct=0,
+            reference_price=1.647,
+            current_qty=30800,
+            action="SELL",
+        )
+        self.assertEqual(guidance["side"], "SELL")
+        self.assertEqual(guidance["recommended_shares"], 30800)
+        self.assertEqual(guidance["post_trade_shares"], 0)
+        self.assertEqual(guidance["estimated_amount"], 50727.6)
+
+    def test_target_execution_guidance_reduces_to_market_value_target(self):
+        guidance = ds_scanner.calculate_target_execution_guidance(
+            total_asset=100000,
+            current_market_value=20000,
+            target_position_pct=15,
+            reference_price=10,
+            current_qty=2000,
+            action="REDUCE",
+        )
+        self.assertEqual(guidance["side"], "SELL")
+        self.assertEqual(guidance["recommended_shares"], 500)
+        self.assertEqual(guidance["post_trade_shares"], 1500)
+
     def test_four_dimensional_score_is_bounded_and_sums_to_total(self):
         score = ds_scanner.calculate_four_dimensional_score(
             15, 1.05, 1.0, 5, 1.5, "💰流入", 60, 2, 2, 0.02, 1.08
@@ -99,6 +126,25 @@ class ScannerDecisionTests(unittest.TestCase):
         decision = ds_scanner.build_authoritative_decision([row], [holding], 10000, 90000)
         self.assertEqual(decision["operations"][0]["rule_code"], "RISK_STOP")
         self.assertEqual(decision["operations"][0]["action"], "SELL")
+
+    def test_sell_operation_keeps_actual_position_and_full_exit_guidance(self):
+        row = signal(grade="无效", total=72)
+        holding = {
+            "symbol": "588000",
+            "name": "测试ETF",
+            "qty": 12000,
+            "price": 1.0,
+            "value": 12000,
+            "profit_pct": 6,
+            "policy_score": 20,
+            "days": 10,
+        }
+        decision = ds_scanner.build_authoritative_decision([row], [holding], 12000, 88000)
+        op = decision["operations"][0]
+        self.assertEqual(op["action"], "SELL")
+        self.assertEqual(op["current_position_pct"], 12.0)
+        self.assertEqual(op["market_value"], 12000)
+        self.assertEqual(op["execution_guidance"]["recommended_shares"], 12000)
 
     def test_data_gap_holds_existing_position_and_blocks_add(self):
         row = signal(valid=False)

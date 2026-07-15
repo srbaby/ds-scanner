@@ -1890,7 +1890,7 @@
       /* “操作”列此前留了140px但行内只有一个小圆形展开箭头（真正的减仓/清仓按钮在展开面板里），
          白白挤占“名称”列的1fr空间，导致标的名称在桌面端被截断（手机版是纵向堆叠布局不受影响）。
          这里把code/qty/cost/date/action几列收紧，并给名称列一个minmax保底宽度。 */
-      grid-template-columns: 92px minmax(130px, 1fr) 72px 84px 100px 40px;
+      grid-template-columns: 92px minmax(130px, 1fr) 72px 106px 84px 100px 40px;
       gap: 12px;
       padding: 10px 16px;
       margin: 0 12px;
@@ -1904,7 +1904,7 @@
     /* 卡片重构为表格行 */
     .holding-card .card-main {
       display: grid;
-      grid-template-columns: 92px minmax(130px, 1fr) 72px 84px 100px 40px;
+      grid-template-columns: 92px minmax(130px, 1fr) 72px 106px 84px 100px 40px;
       gap: 12px;
       align-items: center;
       padding: 12px 14px;
@@ -1913,6 +1913,7 @@
     /* 桌面下显示列数据，隐藏移动端 meta */
     .card-col { display: flex; align-items: center; }
     .card-col-qty { font-family: var(--f-num); font-size: 13px; color: var(--t2); font-weight: 500; font-variant-numeric: tabular-nums; }
+    .card-col-position { font-family: var(--f-num); font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
     .card-col-cost { font-family: var(--f-num); font-size: 12px; color: var(--t3); font-variant-numeric: tabular-nums; }
     .card-col-date { font-family: var(--f-num); font-size: 12px; color: var(--t2); }
     .card-meta { display: none; }
@@ -1950,4 +1951,3 @@
     /* 折叠区桌面悬停 */
     .info-section summary:hover { background: var(--bg4); }
   }
-

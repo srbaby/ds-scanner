@@ -80,6 +80,55 @@ assert.equal(context.validateOperationInput('REDUCE', 1000, 500, NaN), '');
 assert.equal(context.validateOperationInput('SELL', 1000, 0, NaN), '');
 assert.match(context.validateOperationInput('SELL', 1000, 500, NaN), /必须为0/);
 
+vm.runInContext(`
+  holdingsData = {
+    cash_available: 143707.1,
+    holdings: [{ symbol: 'sh515120', qty: 30800, cost: 0.627, buy_date: '2026-07-02' }]
+  };
+  dashboardData = {
+    generated_at: today() + ' 12:01:48',
+    decision: {
+      portfolio: { total_asset: 194432.7 },
+      signals: [{ symbol: '515120', full_symbol: 'sh515120', price: 1.647 }]
+    }
+  };
+`, context);
+const legacySell = {
+  id: 'OP-01', action: 'SELL', symbol: 'sh515120', name: '创新药ETF广发',
+  current_target_position_pct: 10, target_position_pct: 0, adjustment_pct: -10,
+  rule_code: 'PROFIT_WEAKEN', signal_grade: '无效', reason: '已有浮盈但评分或资金转弱',
+};
+const sellActions = context.decisionOperationsToActions([legacySell]);
+assert.equal(sellActions[0].type, 'SELL');
+assert.equal(sellActions[0].guidance.side, 'SELL');
+assert.equal(sellActions[0].guidance.recommended_shares, 30800);
+assert.equal(sellActions[0].guidance.post_trade_shares, 0);
+assert.equal(sellActions[0].qty, '清仓 · 卖出 30,800 份');
+vm.runInContext(`currentAiActions = ${JSON.stringify(sellActions)}`, context);
+assert.equal(context.reasonOptionsFor('sh515120', ['REDUCE', 'SELL']).length, 1);
+assert.equal(context.reasonOptionsFor('sh515120', ['REDUCE', 'SELL'])[0].reason.rule_code, 'PROFIT_WEAKEN');
+const dialogNodes = {
+  'operation-dialog': { dataset: { requestedMode: 'REDUCE' } },
+  'operation-mode': { value: 'REDUCE' },
+  'operation-index': { value: '0' },
+  'operation-reason': { selectedOptions: [{ dataset: { reason: JSON.stringify(context.actionToReason(sellActions[0])) } }] },
+  'operation-qty': { value: 30800, readOnly: false },
+  'operation-dialog-title': { textContent: '' },
+  'operation-qty-label': { textContent: '' },
+  'operation-cost-wrap': { style: {} },
+  'operation-preview': { textContent: '', innerHTML: '' },
+};
+context.document.getElementById = id => dialogNodes[id] || null;
+context.syncOperationModeFromReason();
+assert.equal(dialogNodes['operation-mode'].value, 'SELL');
+assert.equal(dialogNodes['operation-qty'].value, 0);
+assert.equal(dialogNodes['operation-qty'].readOnly, true);
+assert.match(dialogNodes['operation-dialog-title'].textContent, /^清仓/);
+dialogNodes['operation-dialog'].dataset.requestedMode = 'CORRECT_REASON';
+dialogNodes['operation-mode'].value = 'CORRECT_REASON';
+context.syncOperationModeFromReason();
+assert.equal(dialogNodes['operation-mode'].value, 'CORRECT_REASON');
+
 const before = {
   cash_available: 10000,
   holdings: [{ symbol: 'sh512480', qty: 1000, cost: 1.1, buy_date: '2026-07-01' }],

@@ -51,7 +51,7 @@ const OBSERVE_REF = 'main';
 const DEFAULT_VERSIONS = {
   methodology_version: 'v3.1',
   prompt_contract_version: 'v3.1',
-  data_schema_version: 'v3.0',
+  data_schema_version: 'v3.1',
 };
 
 // ============================================================
@@ -527,6 +527,13 @@ function renderAll() {
     const displayCode = h.symbol.replace(/^(sh|sz)/, '');
     const prefix = h.symbol.startsWith('sh') ? 'SH' : 'SZ';
     const reduced = h.is_reduced ? '<span class="holding-flag holding-flag-reduced">减仓</span>' : '';
+    const scan = holdingScanSummary(h);
+    const positionText = scan.available
+      ? `实仓 ${pctText(scan.currentPositionPct)} → 目标 ${pctText(scan.targetPositionPct)}`
+      : '仓位待今日扫描确认';
+    const scanAction = scan.available && scan.action && ['BUY', 'ADD', 'REDUCE', 'SELL'].includes(scan.action)
+      ? ` · ${actionLabel(scan.action)}${scan.action === 'SELL' ? '（清仓）' : ''}`
+      : '';
     const isOpen = editOpenState.has(fullIdx);
     const openClass = isOpen ? ' is-open' : '';
 
@@ -542,9 +549,10 @@ function renderAll() {
             <div class="card-name" id="name-${fullIdx}">${name}</div>
             ${reduced}
           </div>
-          <div class="card-meta">${h.qty.toLocaleString()} 份 · 成本 ${h.cost} · ${h.buy_date}</div>
+          <div class="card-meta">${h.qty.toLocaleString()} 份 · 成本 ${h.cost} · ${h.buy_date} · ${positionText}${scanAction}</div>
         </div>
         <div class="card-col card-col-qty">${h.qty.toLocaleString()}</div>
+        <div class="card-col card-col-position">${positionText}</div>
         <div class="card-col card-col-cost">${h.cost}</div>
         <div class="card-col card-col-date">${h.buy_date}</div>
         <div class="card-expand-indicator" aria-hidden="true">▾</div>
@@ -591,6 +599,101 @@ function renderAll() {
     });
   });
 } // <─── 注意！这个大括号必须在最后面，用来闭合 renderAll 函数
+
+function scannerDashboardIsFresh() {
+  return !!dashboardData?.generated_at && dashboardData.generated_at.slice(0, 10) === today();
+}
+
+function scannerOperationForSymbol(symbol) {
+  const normalized = normalizeFullSymbol(symbol);
+  return (dashboardData?.decision?.operations || []).find(op =>
+    normalizeFullSymbol(op.symbol) === normalized
+  ) || null;
+}
+
+function holdingScanSummary(holding) {
+  if (!scannerDashboardIsFresh()) return { available: false };
+  const operation = scannerOperationForSymbol(holding.symbol);
+  if (!operation) return { available: false };
+
+  const totalAsset = Number(dashboardData?.decision?.portfolio?.total_asset);
+  let currentPositionPct = Number(operation.current_position_pct);
+  let marketValue = Number(operation.market_value);
+  let referencePrice = Number(operation.reference_price);
+
+  // v3.0 dashboard 兼容：同一份当日扫描中已有实时 signal 价格，可安全回算实仓；
+  // 不回退到成本价，避免将历史成本伪装成实时市值。
+  const signal = (dashboardData?.decision?.signals || []).find(item =>
+    normalizeFullSymbol(item.full_symbol || item.symbol) === normalizeFullSymbol(holding.symbol)
+  );
+  if (!(referencePrice > 0)) referencePrice = Number(signal?.price);
+  if (!(marketValue > 0) && referencePrice > 0) {
+    marketValue = Number(holding.qty || 0) * referencePrice;
+  }
+  if (!(currentPositionPct >= 0) && marketValue >= 0 && totalAsset > 0) {
+    currentPositionPct = marketValue / totalAsset * 100;
+  }
+  if (!(currentPositionPct >= 0) || !(marketValue >= 0)) return { available: false };
+
+  return {
+    available: true,
+    action: normalizeActionType(operation.action),
+    currentPositionPct,
+    targetPositionPct: Number(operation.target_position_pct),
+    marketValue,
+    referencePrice,
+    guidance: operation.execution_guidance || deriveExecutionGuidance(operation),
+  };
+}
+
+function deriveExecutionGuidance(operation) {
+  const action = normalizeActionType(operation?.action);
+  if (!['ADD', 'REDUCE', 'SELL'].includes(action)) return null;
+  const holding = (holdingsData.holdings || []).find(item =>
+    normalizeFullSymbol(item.symbol) === normalizeFullSymbol(operation.symbol)
+  );
+  const totalAsset = Number(dashboardData?.decision?.portfolio?.total_asset);
+  const signal = (dashboardData?.decision?.signals || []).find(item =>
+    normalizeFullSymbol(item.full_symbol || item.symbol) === normalizeFullSymbol(operation.symbol)
+  );
+  const price = Number(operation.reference_price || signal?.price);
+  const targetPct = Number(operation.target_position_pct);
+  const qty = Number(holding?.qty);
+  if (!holding || !(totalAsset > 0) || !(price > 0) || !Number.isFinite(targetPct) || !(qty > 0)) return null;
+
+  const targetAmount = totalAsset * targetPct / 100;
+  const currentMarketValue = qty * price;
+  let shares;
+  let side;
+  let postTradeShares;
+  if (action === 'ADD') {
+    shares = Math.floor(Math.max(0, targetAmount - currentMarketValue) / price / 100) * 100;
+    if (shares <= 0) return null;
+    side = 'BUY';
+    postTradeShares = qty + shares;
+  } else {
+    shares = targetPct === 0
+      ? qty
+      : Math.max(0, qty - Math.floor(targetAmount / price / 100) * 100);
+    if (shares <= 0) return null;
+    side = 'SELL';
+    postTradeShares = qty - shares;
+  }
+  return {
+    side,
+    lot_size: 100,
+    reference_price: Number(price.toFixed(3)),
+    current_market_value: Number(currentMarketValue.toFixed(2)),
+    target_position_pct: Number(targetPct.toFixed(2)),
+    target_position_amount: Number(targetAmount.toFixed(2)),
+    trade_target_amount: Number((shares * price).toFixed(2)),
+    recommended_shares: shares,
+    recommended_lots: Math.floor(shares / 100),
+    estimated_amount: Number((shares * price).toFixed(2)),
+    post_trade_shares: postTradeShares,
+    price_note: '从当日扫描信号回算；实际成交价、费用和可用资金以券商为准',
+  };
+}
 
 function toggleEdit(idx) {
   if (editOpenState.has(idx)) {
@@ -744,6 +847,12 @@ function actionToReason(action) {
   };
 }
 
+function selectedScannerAction(selectId) {
+  const reason = selectedReason(selectId);
+  if (!reason.ai_action_id) return null;
+  return currentAiActions.find(action => action.actionId === reason.ai_action_id) || null;
+}
+
 function reasonOptionsFor(symbol, types = []) {
   const normalized = symbol ? normalizeFullSymbol(symbol) : '';
   const allowed = Array.isArray(types) ? types : [types];
@@ -869,23 +978,47 @@ function hasValidReason(selectId) {
 }
 
 function decisionOperationsToActions(operations) {
-  return (operations || []).map(op => ({
-    actionId: op.id || '',
-    type: normalizeActionType(op.action),
-    code: op.symbol || '',
-    name: op.name || '',
-    currentTarget: String(op.current_target_position_pct ?? 0),
-    target: String(op.target_position_pct ?? 0),
-    delta: String(op.adjustment_pct ?? 0),
-    ruleCode: op.rule_code || '',
-    signalGrade: op.signal_grade || '',
-    reasonZh: op.reason || '',
-    metrics: JSON.stringify(op.metrics || {}),
-    qty: `${op.adjustment_pct > 0 ? '+' : ''}${op.adjustment_pct || 0}%`,
-    note: op.reason || '',
-    authority: 'scanner',
-    guidance: op.execution_guidance || null,
-  }));
+  return (operations || []).map(op => {
+    const guidance = op.execution_guidance || deriveExecutionGuidance(op);
+    return {
+      actionId: op.id || '',
+      type: normalizeActionType(op.action),
+      code: op.symbol || '',
+      name: op.name || '',
+      currentTarget: String(op.current_target_position_pct ?? 0),
+      currentPosition: op.current_position_pct ?? '',
+      target: String(op.target_position_pct ?? 0),
+      delta: String(op.adjustment_pct ?? 0),
+      ruleCode: op.rule_code || '',
+      signalGrade: op.signal_grade || '',
+      reasonZh: op.reason || '',
+      metrics: JSON.stringify(op.metrics || {}),
+      qty: operationQuantityLabel({ ...op, guidance }),
+      note: op.reason || '',
+      authority: 'scanner',
+      guidance,
+    };
+  });
+}
+
+function operationQuantityLabel(operation) {
+  const guidance = operation.execution_guidance || operation.guidance;
+  const shares = Number(guidance?.recommended_shares);
+  if (Number.isFinite(shares) && shares > 0) {
+    if (normalizeActionType(operation.action || operation.type) === 'SELL') return `清仓 · 卖出 ${shares.toLocaleString()} 份`;
+    if (normalizeActionType(operation.action || operation.type) === 'REDUCE') return `卖出 ${shares.toLocaleString()} 份`;
+    return `买入 ${shares.toLocaleString()} 份`;
+  }
+  const delta = Number(operation.adjustment_pct ?? operation.delta ?? 0);
+  return `${delta > 0 ? '+' : ''}${delta}%`;
+}
+
+function actionPositionLabel(action) {
+  if (action.currentPosition === '' || action.currentPosition === null || action.currentPosition === undefined) return '';
+  const current = Number(action.currentPosition);
+  const target = Number(action.target);
+  if (!Number.isFinite(current) || !Number.isFinite(target)) return '';
+  return `实仓 ${pctText(current)} → 目标 ${pctText(target)}`;
 }
 
 function renderQuickGuide(data, aiText) {
@@ -929,6 +1062,8 @@ function renderQuickGuide(data, aiText) {
       if (action.ruleCode) {
         parts.push(`<div class="quick-note">${escapeHtml(action.ruleCode)} · ${escapeHtml(action.reasonZh || '')}</div>`);
       }
+      const position = actionPositionLabel(action);
+      if (position) parts.push(`<div class="quick-note">${escapeHtml(position)}</div>`);
       parts.push('</div>');
     });
     parts.push('</div>');
@@ -1757,7 +1892,7 @@ function openReduce(idx) {
     qty: h.qty,
     cost: h.cost,
     cash: holdingsData.cash_available,
-    reasonTypes: ['REDUCE'],
+    reasonTypes: ['REDUCE', 'SELL'],
   });
 }
 
@@ -1818,6 +1953,7 @@ async function openOperationDialog(mode, idx, options = {}) {
   document.getElementById('operation-mode').value = mode;
   document.getElementById('operation-index').value = Number.isInteger(idx) ? idx : '';
   document.getElementById('operation-event-id').value = options.eventId || '';
+  dialog.dataset.requestedMode = mode;
   document.getElementById('operation-dialog-title').textContent = options.title || '登记操作';
   document.getElementById('operation-qty').value = options.qty ?? h?.qty ?? '';
   document.getElementById('operation-cost').value = options.cost ?? h?.cost ?? '';
@@ -1829,13 +1965,98 @@ async function openOperationDialog(mode, idx, options = {}) {
   document.getElementById('operation-cash-wrap').style.display = mode === 'CORRECT_REASON' ? 'none' : 'block';
   const symbol = h?.symbol || options.symbol || '';
   fillReasonSelect('operation-reason', symbol, options.reasonTypes || [mode], options.preferredRule || '');
-  document.getElementById('operation-preview').textContent =
-    mode === 'CORRECT_REASON'
-      ? '只更正操作依据，不改变持仓和资金。原记录会保留并标记为已更正。'
-      : mode === 'ADD'
-        ? `当前 ${h?.qty ?? 0} 份；请填写加仓后的总份额、持仓成本和可用资金。`
-        : `当前 ${h?.qty ?? 0} 份；请填写操作后的剩余份额和可用资金。`;
+  syncOperationModeFromReason();
   dialog.showModal();
+}
+
+function configureOperationDialog(mode, holding) {
+  const qtyInput = document.getElementById('operation-qty');
+  const title = document.getElementById('operation-dialog-title');
+  const qtyLabel = document.getElementById('operation-qty-label');
+  const costWrap = document.getElementById('operation-cost-wrap');
+  if (!qtyInput || !title || !qtyLabel || !costWrap) return;
+  const symbol = holding?.symbol || '';
+  document.getElementById('operation-mode').value = mode;
+  if (mode === 'SELL') {
+    title.textContent = `清仓 ${symbol}`;
+    qtyLabel.textContent = '清仓后剩余份额';
+    qtyInput.value = 0;
+    qtyInput.readOnly = true;
+    costWrap.style.display = 'none';
+  } else {
+    title.textContent = mode === 'ADD' ? `加仓 ${symbol}` : `减仓 ${symbol}`;
+    qtyLabel.textContent = mode === 'ADD' ? '操作后总份额' : '操作后剩余份额';
+    qtyInput.readOnly = false;
+    if (mode === 'REDUCE' && Number(qtyInput.value) === 0 && holding) qtyInput.value = holding.qty;
+    costWrap.style.display = mode === 'ADD' ? 'block' : 'none';
+  }
+  renderOperationGuidance();
+}
+
+function syncOperationModeFromReason() {
+  const requested = document.getElementById('operation-dialog')?.dataset.requestedMode || document.getElementById('operation-mode')?.value || 'REDUCE';
+  if (requested === 'CORRECT_REASON') {
+    renderOperationGuidance();
+    return;
+  }
+  const action = selectedScannerAction('operation-reason');
+  const idx = parseInt(document.getElementById('operation-index')?.value);
+  const holding = holdingsData.holdings?.[idx];
+  const mode = action?.type === 'SELL' ? 'SELL' : requested;
+  configureOperationDialog(mode, holding);
+}
+
+function currentOperationGuidance() {
+  const action = selectedScannerAction('operation-reason');
+  return action?.guidance || null;
+}
+
+function renderOperationGuidance() {
+  const preview = document.getElementById('operation-preview');
+  const mode = document.getElementById('operation-mode')?.value;
+  const idx = parseInt(document.getElementById('operation-index')?.value);
+  const holding = holdingsData.holdings?.[idx];
+  if (!preview) return;
+  if (mode === 'CORRECT_REASON') {
+    preview.textContent = '只更正操作依据，不改变持仓和资金。原记录会保留并标记为已更正。';
+    return;
+  }
+  const action = selectedScannerAction('operation-reason');
+  const guidance = currentOperationGuidance();
+  if (!guidance || !action) {
+    preview.textContent = mode === 'ADD'
+      ? `当前 ${holding?.qty ?? 0} 份；请填写加仓后的总份额、持仓成本和可用资金。`
+      : `当前 ${holding?.qty ?? 0} 份；请填写操作后的剩余份额和可用资金。`;
+    return;
+  }
+  const verb = guidance.side === 'SELL' ? (mode === 'SELL' ? '全部卖出' : '卖出') : '买入';
+  const position = actionPositionLabel(action);
+  preview.innerHTML = `<strong>扫描器执行参考</strong><br>${escapeHtml(position)}<br>${verb} <strong>${Number(guidance.recommended_shares).toLocaleString()} 份（${Number(guidance.recommended_lots).toLocaleString()} 手）</strong>，参考价 ${Number(guidance.reference_price).toFixed(3)}，预计金额 ¥${Number(guidance.estimated_amount).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}<div><button type="button" class="reason-manual-btn" onclick="applyOperationGuidance()">填入建议</button></div><small>实际成交价、费用和可用资金以券商为准</small>`;
+}
+
+function applyOperationGuidance() {
+  const guidance = currentOperationGuidance();
+  const action = selectedScannerAction('operation-reason');
+  const idx = parseInt(document.getElementById('operation-index')?.value);
+  const holding = holdingsData.holdings?.[idx];
+  if (!guidance || !action || !holding) {
+    toast('当前没有可用的扫描器份额建议', 'error');
+    return;
+  }
+  const mode = action.type === 'SELL' ? 'SELL' : action.type;
+  configureOperationDialog(mode, holding);
+  const qty = Number(guidance.post_trade_shares);
+  document.getElementById('operation-qty').value = Number.isFinite(qty) ? qty : (guidance.side === 'SELL' ? 0 : holding.qty + Number(guidance.recommended_shares));
+  const cash = Number(holdingsData.cash_available || 0);
+  const amount = Number(guidance.estimated_amount || 0);
+  document.getElementById('operation-cash').value = (guidance.side === 'SELL' ? cash + amount : Math.max(0, cash - amount)).toFixed(2);
+  if (mode === 'ADD') {
+    const shares = Number(guidance.recommended_shares || 0);
+    const totalShares = Number(holding.qty || 0) + shares;
+    if (totalShares > 0) {
+      document.getElementById('operation-cost').value = ((Number(holding.qty || 0) * Number(holding.cost || 0) + shares * Number(guidance.reference_price || 0)) / totalShares).toFixed(3);
+    }
+  }
 }
 
 function closeOperationDialog() {
@@ -2085,6 +2306,3 @@ function flashRefresh() {
   clearTimeout(flashTimer);
   flashTimer = setTimeout(() => list.classList.remove('flash-refresh'), 900);
 }
-
-
-

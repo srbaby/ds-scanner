@@ -37,7 +37,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
-from versioning import METHODOLOGY_VERSION, validate_document_versions
+from versioning import DATA_SCHEMA_VERSION, METHODOLOGY_VERSION, validate_document_versions
 
 # ============================================================
 # 系统全局常量
@@ -1388,6 +1388,69 @@ def calculate_execution_guidance(
     }
 
 
+def calculate_target_execution_guidance(
+    total_asset: float,
+    current_market_value: float,
+    target_position_pct: float,
+    reference_price: float,
+    current_qty: int,
+    action: str,
+    lot_size: int = 100,
+) -> Optional[Dict]:
+    """把实际持仓市值收敛到目标仓位，生成买入或卖出的可执行份额。
+
+    ``adjustment_pct`` 仍表示策略档位的变化；本函数只负责把实际市值差换算
+    成券商可录入的份额，避免 10%→0% 只显示 ``-10%`` 却没有清仓指引。
+    """
+    if (
+        total_asset <= 0
+        or current_market_value < 0
+        or target_position_pct < 0
+        or reference_price <= 0
+        or current_qty < 0
+        or lot_size <= 0
+        or action not in {"BUY", "ADD", "REDUCE", "SELL"}
+    ):
+        return None
+
+    target_amount = total_asset * target_position_pct / 100
+    if action in {"BUY", "ADD"}:
+        trade_amount = max(0.0, target_amount - current_market_value)
+        shares = math.floor(trade_amount / reference_price / lot_size) * lot_size
+        if shares <= 0:
+            return None
+        side = "BUY"
+        post_trade_shares = current_qty + shares
+    else:
+        # 目标为 0% 就是清仓：即使持仓存在零股，也应当全部卖出。
+        if target_position_pct == 0:
+            shares = current_qty
+        else:
+            target_shares = math.floor(target_amount / reference_price / lot_size) * lot_size
+            shares = max(0, current_qty - target_shares)
+        if shares <= 0:
+            return None
+        trade_amount = shares * reference_price
+        side = "SELL"
+        post_trade_shares = current_qty - shares
+
+    estimated_amount = shares * reference_price
+    return {
+        "side": side,
+        "lot_size": lot_size,
+        "reference_price": round(reference_price, 3),
+        "current_market_value": round(current_market_value, 2),
+        "target_position_pct": round(target_position_pct, 2),
+        "target_position_amount": round(target_amount, 2),
+        "trade_target_amount": round(trade_amount, 2),
+        "recommended_shares": shares,
+        "recommended_lots": shares // lot_size,
+        "estimated_amount": round(estimated_amount, 2),
+        "post_trade_shares": post_trade_shares,
+        "price_note": "按扫描参考价估算，实际成交价、费用和可用资金以券商为准",
+    }
+
+
 def build_authoritative_decision(
     etf_list: List[Dict],
     holdings_data: List[Dict],
@@ -1444,6 +1507,9 @@ def build_authoritative_decision(
                 "current_position_pct": round(actual_pct, 1),
                 "current_target_position_pct": current_tier,
                 "target_position_pct": target,
+                "market_value": holding["value"],
+                "reference_price": holding.get("price") or (etf or {}).get("price", 0),
+                "current_qty": int(holding.get("qty", 0) or 0),
                 "rule_code": rule,
                 "signal_grade": grade,
                 "reason": reason,
@@ -1515,6 +1581,9 @@ def build_authoritative_decision(
                 "current_position_pct": 0.0,
                 "current_target_position_pct": 0,
                 "target_position_pct": target,
+                "market_value": 0.0,
+                "reference_price": etf.get("price", 0),
+                "current_qty": 0,
                 "rule_code": rule,
                 "signal_grade": grade,
                 "reason": reason,
@@ -1534,10 +1603,13 @@ def build_authoritative_decision(
         adjustment_pct = (
             row["target_position_pct"] - row["current_target_position_pct"]
         )
-        execution_guidance = calculate_execution_guidance(
+        execution_guidance = calculate_target_execution_guidance(
             total_asset,
-            adjustment_pct,
-            float(etf.get("price", 0) or 0),
+            float(row["market_value"] or 0),
+            float(row["target_position_pct"] or 0),
+            float(row["reference_price"] or etf.get("price", 0) or 0),
+            int(row["current_qty"] or 0),
+            action,
         )
         operations.append(
             {
@@ -1545,9 +1617,13 @@ def build_authoritative_decision(
                 "action": action,
                 "symbol": row["symbol"],
                 "name": row["name"],
+                "current_position_pct": row["current_position_pct"],
                 "current_target_position_pct": row["current_target_position_pct"],
                 "target_position_pct": row["target_position_pct"],
                 "adjustment_pct": adjustment_pct,
+                "market_value": round(float(row["market_value"] or 0), 2),
+                "reference_price": round(float(row["reference_price"] or 0), 3),
+                "current_qty": int(row["current_qty"] or 0),
                 "rule_code": row["rule_code"],
                 "signal_grade": row["signal_grade"],
                 "reason": row["reason"],
@@ -1579,7 +1655,7 @@ def build_authoritative_decision(
         )
 
     return {
-        "schema_version": "v3.0",
+        "schema_version": DATA_SCHEMA_VERSION,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "authority": "scanner",
         "signals": etf_list,
@@ -1878,7 +1954,7 @@ def main(force_refresh=False):
         # Bark 是主报警通道：这里只落一个最小 decision.json 供上报，不 sys.exit，
         # 否则会跳过后续 Bark 推送步骤，把报警一起吞掉。
         crashed_decision = {
-            "schema_version": "v3.0",
+            "schema_version": DATA_SCHEMA_VERSION,
             "authority": "scanner",
             "operations": [],
             "portfolio": {"health": "crashed", "data_gap_holdings": []},

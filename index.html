@@ -214,7 +214,7 @@
                 </div>
                 <div class="holdings-table-header">
                     <span>代码</span><span>名称</span><span>数量</span
-                    ><span>成本</span><span>日期</span><span>操作</span>
+                    ><span>实仓 → 目标</span><span>成本</span><span>日期</span><span>操作</span>
                 </div>
                 <div id="holdings-list">
                     <div class="loading-skeleton" id="loading-skeleton">
@@ -387,7 +387,7 @@
                 </div>
                 <div>
                     <div class="field-label">操作依据</div>
-                    <select id="operation-reason"></select>
+                    <select id="operation-reason" onchange="syncOperationModeFromReason()"></select>
                     <div class="reason-control">
                         <div class="reason-status" id="operation-reason-status"></div>
                         <button type="button" class="reason-manual-btn" id="operation-reason-manual" onclick="toggleManualReason('operation-reason')">
@@ -406,7 +406,6 @@
         <!-- ?v= 每次改 js/app.js 后手动递增，绕过 max-age=600 的 HTTP 缓存，
              确保新访问/整页刷新能拿到最新逻辑（不解决"标签页开太久不刷新"，那个由
              stale-banner + pageLoadedAt 8小时检测兜底，见 js/app.js） -->
-        <script src="js/app.js?v=20260713a"></script>
+        <script src="js/app.js?v=20260715a"></script>
     </body>
 </html>
-

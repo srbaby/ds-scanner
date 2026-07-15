@@ -15,7 +15,9 @@ export class GistClient {
   constructor({ token, gistId, fetchImpl = fetch }) {
     this.token = token;
     this.gistId = gistId;
-    this.fetch = fetchImpl;
+    // Safari/WebKit 的原生 fetch 必须以 Window/globalThis 语境调用；
+    // 不能直接作为 GistClient 的实例方法保存后再以 this.fetch() 调用。
+    this.fetch = (...args) => fetchImpl(...args);
   }
 
   headers(extra = {}) {

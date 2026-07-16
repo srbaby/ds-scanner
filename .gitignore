@@ -1,5 +1,4 @@
-# 本地私有协作规范，不进公开仓库
-CLAUDE.md
+# 本地私有协作规范，不进公开仓库（AGENTS.md 从未实际创建过，规则保留占位）
 AGENTS.md
 
 # 旧的无点前缀本地镜像文件夹，已被真正的 .github/ 取代
@@ -7,9 +6,6 @@ github/
 
 # 低频手动维护的 Gemini 改分指引，非代码
 data/etf_base_config/
-
-# CF Worker 源码存档，实际部署在 Cloudflare（DS_WORKER），不经此仓库
-automation/cf_worker_trigger.js
 
 # Python 缓存
 automation/__pycache__/

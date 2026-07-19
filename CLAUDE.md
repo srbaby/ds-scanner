@@ -122,10 +122,17 @@ index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
 | 项       | 值                                                           |
 | -------- | ------------------------------------------------------------ |
 | Worker   | `ds-scan-trigger`（Cloudflare，源码存档 `automation/cf_worker_trigger.js`） |
-| Cron     | `49 6 * * MON-FRI`（UTC）= 北京 14:49 周一至五。⚠️ CF cron 星期字段 1=周日，必须用英文缩写 |
-| 变量     | `GH_REPO`=srbaby/ds-scanner（文本）、`GH_TOKEN`=fine-grained PAT（机密，仅 Actions 读写） |
+| 排班     | **不在本 Worker 上**。自身公网 Cron 已随中控化删除（配额还给中控），改由 `master-scheduler` 经 Service Binding 内网唤醒：北京 12:00 / 14:49 发 `scan`，20:30 发 `observe`，周一至五 |
+| 变量     | `GH_REPO`=srbaby/ds-scanner（文本）、`GH_TOKEN`=fine-grained PAT（机密，仅 Actions 读写）、`CRON_TOKEN`（机密，中控内网唤醒的暗号） |
 | 手动备用 | 浏览器访问 Worker URL `?key=`（PAT 第12-19位）               |
 | 准时性   | 实测分钟级（GitHub 自带 cron 延时数小时，已弃用）；iOS 快捷指令已退役（2026-06-11） |
+
+> **排班归中控管，不在本仓库。** 几点唤醒、唤醒哪个 action，全在 `srbaby/Master-Scheduler`——
+> 那是**独立的私有仓库**（本地 `D:\Projects\Master-Scheduler`），账户级基础设施，同时服务本项目与基金看板。
+> 本仓库只管收到唤醒之后做什么。**要改时间点去那个仓库改并重新部署，别在这里找。**
+>
+> 该仓库私有是有原因的：它的 README 含 CF 绑定清单与 `/test` 后门地址，而 `ds-scanner` 与 `fund-monitor`
+> 都是公开仓库。
 
 ---
 

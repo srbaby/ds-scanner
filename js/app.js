@@ -1,5 +1,7 @@
-import { GistClient, parseJson, parseJsonl as parseGistJsonl } from './api.js';
-import { actionPriority, dashboardIsFresh, sortHoldingsForExecution } from './decision.js';
+// api.js / decision.js 以普通 <script> 加载（非 type="module"），
+// 与本文件共享同一顶层作用域，classId/函数名可直接引用——
+// 保留这层是为了 file:// 本地直接双击打开也能测试，不强依赖起服务器。
+const parseGistJsonl = parseJsonl;
 
 // ============================================================
 // ETF 池（与 ds_scanner.py 保持一致）
@@ -174,7 +176,7 @@ async function loadData() {
   dashboardData = parseJson(files['dashboard.json'], null);
   etfPoolData = parseJson(files['etf_pool.json'], {})?.etfs || {};
   const rawEvents = files[executionFileName()] || '';
-  executionEvents = parseJsonl(rawEvents);
+  executionEvents = parseGistJsonl(rawEvents);
   dataManifest = parseJson(files['data_manifest.json'], {});
   reportData = dashboardData?.report || '';
 }
@@ -250,10 +252,6 @@ async function saveData(extraFiles = {}, successMessage = '✅ 已保存') {
     toast('❌ 未写入: ' + e.message, 'error');
     return false;
   }
-}
-
-function parseJsonl(raw) {
-  return parseGistJsonl(raw);
 }
 
 function dumpJsonl(rows) {
@@ -406,7 +404,7 @@ async function verifyEventWritten(eventId) {
   const gist = await gistClient.index();
   gistRevision = gist.history?.[0]?.version || gistRevision;
   const raw = await gistClient.readFile(gist, executionFileName()) || '';
-  if (!parseJsonl(raw).some(row => row.event_id === eventId)) {
+  if (!parseGistJsonl(raw).some(row => row.event_id === eventId)) {
     throw new Error('写后校验未找到事件ID，请刷新确认');
   }
 }
@@ -517,7 +515,7 @@ function renderAll() {
           <div class="card-meta">${h.qty.toLocaleString()} 份 · 成本 ${h.cost} · ${h.buy_date} · ${positionText}${scanAction}</div>
         </div>
         <div class="card-col card-col-qty">${h.qty.toLocaleString()}</div>
-        <div class="card-col card-col-position">${positionText}</div>
+        <div class="card-col card-col-position" title="${positionText}">${positionText}</div>
         <div class="card-col card-col-cost">${h.cost}</div>
         <div class="card-col card-col-date">${h.buy_date}</div>
         <div class="card-expand-indicator" aria-hidden="true">▾</div>
@@ -873,7 +871,11 @@ function fillReasonSelect(selectId, symbol, types, preferredRule = '') {
     select.disabled = false;
     select.innerHTML = options.map((item, idx) => {
       const selected = preferredRule && item.reason.rule_code === preferredRule ? ' selected' : (!preferredRule && idx === 0 ? ' selected' : '');
-      return `<option value="${idx}" data-reason="${escapeHtml(JSON.stringify(item.reason))}"${selected}>${escapeHtml(item.label)}</option>`;
+      // data-reason 存的是 JSON.stringify 结果，本身就一堆双引号；escapeHtml 不转义引号，
+      // 会在属性值里提前把 " 截断，导致 dataset.reason 读出来是半截 JSON、JSON.parse 直接炸，
+      // selectedReason() 静默 catch 成 {}，rule_code 兜底成 MANUAL_BACKFILL——哪怕这里选中的
+      // 明明是扫描器精确匹配的那条。属性值必须用 escapeAttr（多转义了 "/'）。
+      return `<option value="${idx}" data-reason="${escapeAttr(JSON.stringify(item.reason))}"${selected}>${escapeHtml(item.label)}</option>`;
     }).join('');
     if (status) {
       status.className = 'reason-status reason-status-ok';
@@ -915,7 +917,7 @@ function toggleManualReason(selectId) {
   const item = manualReasonOption();
   select.disabled = false;
   select.dataset.manualOverride = 'true';
-  select.innerHTML = `<option value="manual" data-reason="${escapeHtml(JSON.stringify(item.reason))}" selected>${escapeHtml(item.label)}</option>`;
+  select.innerHTML = `<option value="manual" data-reason="${escapeAttr(JSON.stringify(item.reason))}" selected>${escapeHtml(item.label)}</option>`;
   const status = document.getElementById(`${selectId}-status`);
   const manualButton = document.getElementById(`${selectId}-manual`);
   if (status) {
@@ -1092,9 +1094,9 @@ function policyWatchRows(title, rows, tone) {
   return `<div class="policy-watch-group"><div class="policy-watch-group-title">${escapeHtml(title)}</div>${items}</div>`;
 }
 
-function signedNumber(value) {
+function signedNumber(value, decimals = 2) {
   const n = Number(value || 0);
-  return `${n > 0 ? '+' : ''}${Number.isInteger(n) ? n : n.toFixed(2)}`;
+  return `${n > 0 ? '+' : ''}${Number.isInteger(n) ? n : n.toFixed(decimals)}`;
 }
 // ============================================================
 // 扫描器权威决策 + AI非权威审计
@@ -1402,8 +1404,8 @@ function observerTooltipHtml(date, lines) {
   const hsExcess = Number.isFinite(xplan) && Number.isFinite(hs300) ? xplan - hs300 : null;
   const csiExcess = Number.isFinite(xplan) && Number.isFinite(csi500) ? xplan - csi500 : null;
   const excessText = [
-    Number.isFinite(hsExcess) ? `较沪深300 ${signedNum(hsExcess)}点` : '',
-    Number.isFinite(csiExcess) ? `较中证500 ${signedNum(csiExcess)}点` : '',
+    Number.isFinite(hsExcess) ? `较沪深300 ${signedNumber(hsExcess, 1)}点` : '',
+    Number.isFinite(csiExcess) ? `较中证500 ${signedNumber(csiExcess, 1)}点` : '',
   ].filter(Boolean).join(' / ');
   return `<div class="observer-tooltip-date">${escapeHtml(date || '')}</div>
     ${rows}
@@ -1417,9 +1419,9 @@ function observerInsightHtml(lines, stats) {
   const csi500 = observerLineValue(lines, 'csi500', lastDate);
   const enhanced = observerLineValue(lines, 'enhanced_ref', lastDate);
   const parts = [];
-  if (Number.isFinite(xplan) && Number.isFinite(hs300)) parts.push(`较沪深300 ${signedNum(xplan - hs300)}点`);
-  if (Number.isFinite(xplan) && Number.isFinite(csi500)) parts.push(`较中证500 ${signedNum(xplan - csi500)}点`);
-  if (Number.isFinite(xplan) && Number.isFinite(enhanced)) parts.push(`较增强参考 ${signedNum(xplan - enhanced)}点`);
+  if (Number.isFinite(xplan) && Number.isFinite(hs300)) parts.push(`较沪深300 ${signedNumber(xplan - hs300, 1)}点`);
+  if (Number.isFinite(xplan) && Number.isFinite(csi500)) parts.push(`较中证500 ${signedNumber(xplan - csi500, 1)}点`);
+  if (Number.isFinite(xplan) && Number.isFinite(enhanced)) parts.push(`较增强参考 ${signedNumber(xplan - enhanced, 1)}点`);
   const graduation = stats.graduation || {};
   const breaker = stats.circuit_breaker || {};
   const gradB = Number(graduation.condition_b_progress_pct);
@@ -1437,10 +1439,6 @@ function observerLineValue(lines, key, date) {
   if (!line || !date) return null;
   const value = line.byDate.get(date);
   return Number.isFinite(value) ? value : null;
-}
-
-function signedNum(value) {
-  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}`;
 }
 
 async function confirmObservation() {
@@ -1865,16 +1863,6 @@ function closePosition(idx) {
     cash: holdingsData.cash_available,
     reasonTypes: ['SELL'],
   });
-}
-
-// 卡片退出动画：先加 exit 类，动画结束后再执行回调
-function removeCardWithAnimation(idx, callback) {
-  const card = document.getElementById(`card-${idx}`);
-  if (!card) { callback(); return; }
-  card.classList.add('exit');
-  // 阻止点击穿透
-  card.style.pointerEvents = 'none';
-  setTimeout(callback, 200);
 }
 
 // ============================================================

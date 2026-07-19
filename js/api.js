@@ -2,7 +2,7 @@
  * GitHub Gist transport.  This module deliberately knows nothing about DOM
  * state or investment rules: callers provide file names and JSON/text values.
  */
-export class GistApiError extends Error {
+class GistApiError extends Error {
   constructor(message, { status = 0, code = 'network' } = {}) {
     super(message);
     this.name = 'GistApiError';
@@ -11,7 +11,7 @@ export class GistApiError extends Error {
   }
 }
 
-export class GistClient {
+class GistClient {
   constructor({ token, gistId, fetchImpl = fetch }) {
     this.token = token;
     this.gistId = gistId;
@@ -66,12 +66,12 @@ export class GistClient {
   }
 }
 
-export function parseJson(raw, fallback = null) {
+function parseJson(raw, fallback = null) {
   if (!raw) return fallback;
   try { return JSON.parse(raw); } catch { return fallback; }
 }
 
-export function parseJsonl(raw = '') {
+function parseJsonl(raw = '') {
   return String(raw).split(/\r?\n/).map(line => line.trim()).filter(Boolean)
     .map(line => parseJson(line)).filter(Boolean);
 }

@@ -2,12 +2,35 @@
 <html lang="zh-CN">
     <head>
         <meta charset="UTF-8" />
+        <!-- viewport-fit=cover：内容铺满到刘海/home 条区域，靠 css/style.css 里的
+             --sat/--sab/--sal/--sar（env(safe-area-inset-*)）留白，标准 PWA 必需。
+             不禁用缩放：表格密集，捏合放大是刚需。 -->
         <meta
             name="viewport"
-            content="width=device-width, initial-scale=1.0"
+            content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+        />
+        <!-- 添加到主屏后以独立窗口运行（无 Safari 地址栏）。
+             mobile-web-app-capable 是标准名，apple- 前缀那个是 iOS 历史写法，两个都留。 -->
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta
+            name="apple-mobile-web-app-status-bar-style"
+            content="black-translucent"
+        />
+        <meta name="apple-mobile-web-app-title" content="Stock X" />
+        <meta
+            name="theme-color"
+            content="#0a0e17"
+            media="(prefers-color-scheme: dark)"
+        />
+        <meta
+            name="theme-color"
+            content="#f8f8fa"
+            media="(prefers-color-scheme: light)"
         />
         <link rel="icon" href="favicon.png" />
         <link rel="apple-touch-icon" href="favicon.png" />
+        <link rel="manifest" href="manifest.webmanifest" />
         <title>Stock X</title>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
         <link rel="stylesheet" href="css/style.css" />

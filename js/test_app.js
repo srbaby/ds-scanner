@@ -7,7 +7,15 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const indexHtml = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 assert.doesNotMatch(indexHtml, /\son(?:click|input|change|submit)=/);
-assert.match(indexHtml, /type="module" src="js\/app\.js/);
+// 三个前端脚本必须是普通 <script>，不能是 type="module"：它们按顺序共享同一全局
+// 作用域，且 file:// 双击打开就能测。改成 module 会静默弄坏 file:// 登录（CORS）。
+// 详见 CLAUDE.md「已知坑」第1条。
+// 注意：只查 <script> 标签本身，不能全文搜 type="module"——下面那段解释
+// 为什么不用 module 的 HTML 注释里就有这个字面量。
+assert.doesNotMatch(indexHtml, /<script[^>]*type="module"/);
+assert.match(indexHtml, /<script src="js\/api\.js/);
+assert.match(indexHtml, /<script src="js\/decision\.js/);
+assert.match(indexHtml, /<script src="js\/app\.js/);
 
 const context = {
   console,
@@ -28,12 +36,15 @@ const context = {
   crypto: globalThis.crypto,
 };
 vm.createContext(context);
-vm.runInContext(
-  fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8')
-    .replace(/^import .*;\n/gm, ''),
-  context,
-  { filename: 'app.js' },
-);
+// 按 index.html 里的顺序加载，共享同一全局作用域——和浏览器行为一致，
+// app.js 直接引用 api.js/decision.js 的顶层名字，不走 import。
+for (const file of ['api.js', 'decision.js', 'app.js']) {
+  vm.runInContext(
+    fs.readFileSync(path.join(__dirname, file), 'utf8'),
+    context,
+    { filename: file },
+  );
+}
 
 const aiText = [
   '【操作清单】',

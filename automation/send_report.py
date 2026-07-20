@@ -10,7 +10,7 @@ BARK_ICON = "https://cdn.jsdelivr.net/gh/srbaby/ds-scanner@main/favicon.png"
 DASHBOARD_URL = "https://stock.bailuzun.com"
 DASHBOARD_FILE = "dashboard.json"
 DECISION_FILE = "decision.json"
-# APNs 单条 payload 约 4KB；为标题、图标、分组、URL 等元数据预留足够空间。
+# APNs 单条 payload 约 4KB；为标题、图标、分组等元数据预留足够空间。
 MAX_BARK_BODY_BYTES = 2800
 TRANSACTION_ACTIONS = {"BUY", "ADD", "REDUCE", "SELL"}
 
@@ -263,7 +263,10 @@ def build_payload(report_text, today=None, dashboard_data=None):
         "group": "X-Plan扫描",
         "badge": 1,
         "icon": BARK_ICON,
-        "url": DASHBOARD_URL,
+        # 故意不带 "url"：带了的话点通知会直接被 iOS 丢给默认浏览器，
+        # 而实际要去的是桌面那个 web clip（iOS 无法从通知深链进 web clip，
+        # https 链接必然走浏览器）。现在点通知只进 Bark 看全文，
+        # body 末尾仍保留看板地址作为显式入口。
     }
 
 

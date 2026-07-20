@@ -4,5 +4,13 @@ main = "src/index.js"
 # 抄自 CF 后台 ds-scan-trigger → Settings 里线上实际值(2026-07-20 核对)。
 compatibility_date = "2026-06-11"
 
-# CRON_TOKEN / GH_TOKEN / GH_REPO 通过 CF 后台 Variables 配置为加密机密,
-# 不进本文件。Git 部署不会清空已有 Secrets,但接入后建议肉眼确认一遍。
+# ⚠️ 明文变量必须写在这里,不能只在 CF 后台配。
+# wrangler 对 [vars] 是声明式的:本文件没写的明文变量,部署时会被判定为已删除。
+# 2026-07-20 首次 Git 部署就因为漏了 GH_REPO,把后台那份抹成 undefined,
+# 请求 URL 退化成 https://api.github.com/repos/undefined/actions/...,GitHub 回 404。
+[vars]
+GH_REPO = "srbaby/ds-scanner"
+
+# 加密机密(CRON_TOKEN / GH_TOKEN)是另一套存储,不受 wrangler 部署影响,
+# 也绝不写进本文件。上面那次事故里它们确实都幸存,正因如此才误导人——
+# "变量都还在"看的是机密,被删的是明文变量。

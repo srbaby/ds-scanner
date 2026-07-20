@@ -62,7 +62,10 @@ class SendReportTests(unittest.TestCase):
         self.assertIn("8,200份（82手）", payload["body"])
         self.assertNotIn("扫描报告正文", payload["body"])
         self.assertEqual(payload["group"], "X-Plan扫描")
-        self.assertEqual(payload["url"], "https://stock.bailuzun.com")
+        # 不能带 url：带了点通知就被 iOS 丢进浏览器，而实际要去的是桌面 web clip。
+        self.assertNotIn("url", payload)
+        # 看板地址仍以纯文本留在 body 末尾，作为显式入口。
+        self.assertIn("https://stock.bailuzun.com", payload["body"])
 
     def test_long_multibyte_summary_stays_under_byte_budget(self):
         text = self.dashboard()["ai"]["text"] + "\n⚠️ " + ("超长异常说明" * 2000)

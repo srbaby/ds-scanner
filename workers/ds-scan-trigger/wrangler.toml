@@ -1,0 +1,8 @@
+name = "ds-scan-trigger"
+main = "src/index.js"
+
+# 抄自 CF 后台 ds-scan-trigger → Settings 里线上实际值(2026-07-20 核对)。
+compatibility_date = "2026-06-11"
+
+# CRON_TOKEN / GH_TOKEN / GH_REPO 通过 CF 后台 Variables 配置为加密机密,
+# 不进本文件。Git 部署不会清空已有 Secrets,但接入后建议肉眼确认一遍。

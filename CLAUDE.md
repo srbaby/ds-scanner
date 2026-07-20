@@ -71,7 +71,7 @@ index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
 | `automation/ai_review.py`                   | Gemini API调用模块：读`X-Plan.md`+report.txt，输出四维评分分析文本 | 手动迭代                 |
 | `automation/generate_dashboard.py`          | 调用ai_review，把report+Gemini分析+元信息写入Gist `dashboard.json` | 手动迭代                 |
 | `automation/send_report.py`                 | Bark推送脚本（非交易日自动跳过，report.txt全文塞body，POST避免URL长度限制；APNs单条payload约4KB上限，超长可能截断——已知风险，按选择全文优先） | 手动迭代                 |
-| `automation/cf_worker_trigger.js`           | Cloudflare Worker 定时触发器（部署在 CF，本文件为源码存档）  | 手动迭代                 |
+| `workers/ds-scan-trigger/src/index.js`（2026-07-20 前：`automation/cf_worker_trigger.js`） | Cloudflare Worker 定时触发器（部署在 CF，本文件为源码存档；2026-07-20 起接入 Workers Builds Git 自动部署） | 手动迭代 |
 | `data/etf_pool.json` / `data/holdings.json` | Gist 镜像的本地历史快照（不可据此判断当前状态）              | 脚本自动写回（线上跑）   |
 | `data/etf_base_config.json`                 | 板块政策基础分（0-15分），低频手动维护                       | 手动，重大政策事件后更新 |
 | `data/etf_base_config/`                     | base分评分指南与提示词（GEMINI_UPDATE_GUIDE / PROMPT_FOR_GEMINI） | 低频手动                 |
@@ -123,7 +123,7 @@ index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
 
 | 项       | 值                                                           |
 | -------- | ------------------------------------------------------------ |
-| Worker   | `ds-scan-trigger`（Cloudflare，源码存档 `automation/cf_worker_trigger.js`） |
+| Worker   | `ds-scan-trigger`（Cloudflare，源码存档 `workers/ds-scan-trigger/src/index.js`，2026-07-20 前路径 `automation/cf_worker_trigger.js`） |
 | 排班     | **不在本 Worker 上**。自身公网 Cron 已随中控化删除（配额还给中控），改由 `master-scheduler` 经 Service Binding 内网唤醒：北京 12:00 / 14:49 发 `scan`，20:30 发 `observe`，周一至五 |
 | 变量     | `GH_REPO`=srbaby/ds-scanner（文本）、`GH_TOKEN`=fine-grained PAT（机密，仅 Actions 读写）、`CRON_TOKEN`（机密，中控内网唤醒的暗号） |
 | 手动备用 | 浏览器访问 Worker URL `?key=`（PAT 第12-19位）               |

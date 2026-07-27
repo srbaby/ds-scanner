@@ -38,7 +38,7 @@ jobs:
       - name: 安装Python依赖
         run: pip install requests pandas akshare lxml beautifulsoup4
 
-      - name: 运行v3.1回归测试
+      - name: 运行回归测试（门禁：红了后面全不跑）
         run: |
           npm run test:frontend
           PYTHONPATH=automation python -m unittest \

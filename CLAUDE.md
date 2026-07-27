@@ -12,7 +12,7 @@ X-DeepSeek 波段验证系统，基于"价值波段 Value-Swing"方法论，每�
 
 - **判断"这段代码/这个数字是不是有意设计"，先读 [docs/01-业务意图.md](docs/01-业务意图.md)。** 它讲的是"为什么这么设计、每个数字回答什么问题、哪些看着像 bug 其实是刻意的"，不复述规则。规则永远看 `X-Plan.md`。**发现文档与代码冲突时，默认代码对、文档漏——先问，别按文档去"修正"代码。**
 - **影子系统边界**：不与主体系 0号/1号 的 PE 体系、铁律、持仓混同；本系统持仓/信号不写入主体系文档。
-- **方法论 canonical = 本目录 `X-Plan.md`**（完整版，含附录A扫描器policy分实现）。开仓/止损止盈/仓位/熔断等一切交易规则只看该文件，本文件不保留任何规则摘要，见下"交易规则速查索引"；`automation/ai_review.py` 运行时直接读取该文件全文作为system prompt，不在代码里重复抄写规则。
+- **方法论 canonical = 本目录 `X-Plan.md`**（完整版，扫描器 policy 分实现在模块11）。开仓/止损止盈/仓位/熔断等一切交易规则只看该文件，本文件不保留任何规则摘要、也不再维护规则索引（原因见下"交易规则去哪查"）；AI 审计模块运行时直接读取该文件全文作 system prompt，不在代码里重复抄写规则（该模块当前每日流程未启用，见架构图）。
 - **系统已全部线上运行**（GitHub Actions + Gist + Cloudflare Worker），本地不再跑扫描。本目录是落后的镜像副本，`data/etf_pool.json` / `data/holdings.json` / `dashboard.json` 均为历史快照，**不可据此判断当前持仓或分数**；实时状态只在 Gist（见下"Gist 数据源"），可用已登录的 `gh` CLI（`gh api gists/<id>`）直接读，必要时也可直接 PATCH 写回，不必假设"只能离线分析"。
 - 唯一仍需本地手动维护的是 `data/etf_base_config.json`（改分后 push 生效），评分方法见 `data/etf_base_config/GEMINI_UPDATE_GUIDE.md`（供 Gemini 使用，Claude 不主动改分）。
 - `automation/ds_scanner.py` 依赖新浪行情 + AKShare，Cowork 沙箱不要尝试抓行情，只能对导出副本做离线分析。
@@ -56,20 +56,23 @@ GitHub Actions（.github/workflows/scan.yml）
     └─ 生成 report.txt
     ▼
 automation/generate_dashboard.py
-    ├─ 调用 ai_review.py → Gemini API（system prompt=X-Plan.md全文，user输入=report.txt）
-    └─ 写回 Gist dashboard.json（report原文 + Gemini分析 + 模型/时间/方法论版本；失败不阻塞后续步骤）
+    └─ 写回 Gist dashboard.json（report原文 + decision + 政策旁路 + 时间/方法论版本）
+       ⚠️ 每日流程不调用 AI：scan.yml 显式传 AI_PROVIDER=none，
+          dashboard.ai/audit 恒为 {provider:"none", enabled:false}。
+          ai_review.py(DeepSeek) / gemini_review.py(Gemini) 仅供手动调试，
+          扫描器的 decision 是唯一权威。理由见 docs/01-业务意图.md 第四节第4条
     ▼
 automation/send_report.py
     └─ Bark推送 report.txt 全文（body，POST JSON，badge红点+icon，不变）
     ▼
-index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
-    ├─ 读 Gist holdings.json + dashboard.json：持仓管理置顶，
-    │  AI分析（干货：标准回复格式全文）默认展开，report原文默认折叠
-    │  （AI分析失败时自动展开作兜底）
+index.html（GH Pages，stock.bailuzun.com，持仓管理+看板合一）
+    ├─ 读 Gist holdings.json + dashboard.json：持仓管理置顶；
+    │  AI审计区因 enabled:false 显示"每日AI审计已停用"并折叠，
+    │  操作看扫描器 decision（js/app.js 已正确处理，勿按旧文档"修正"）
     └─ 登记买卖/改资金 → 写回 Gist holdings.json + execution_events_<年>.jsonl
        + data_manifest.json（见下"Gist 数据源"）
     ▼
-人工决策（必要时辅以DeepSeek/Gemini手动二次分析）
+人工决策（必要时长按Bark复制report全文，手动喂给AI做二次分析）
     └─ 14:55-15:00 执行
 ```
 
@@ -79,16 +82,16 @@ index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
 
 | 文件                                        | 说明                                                         | 维护方式                 |
 | ------------------------------------------- | ------------------------------------------------------------ | ------------------------ |
-| `X-Plan.md`                                 | **方法论正文（canonical）**，`ai_review.py`运行时读取全文作为system prompt | 演化走流程               |
+| `X-Plan.md`                                 | **方法论正文（canonical）**，唯一规则源；AI 审计模块运行时读取全文作 system prompt（当前每日流程未启用） | 演化走流程               |
 | `automation/ds_scanner.py`                  | 主扫描脚本                                                    | 手动迭代                 |
-| `automation/ai_review.py`                   | Gemini API调用模块：读`X-Plan.md`+report.txt，输出四维评分分析文本 | 手动迭代                 |
-| `automation/generate_dashboard.py`          | 调用ai_review，把report+Gemini分析+元信息写入Gist `dashboard.json` | 手动迭代                 |
+| `automation/ai_review.py`                   | AI审计模块（DeepSeek）+ 输出契约校验 `validate_ai_output`。**每日流程不调用**，仅供手动调试 | 手动迭代                 |
+| `automation/generate_dashboard.py`          | 把 report + decision + 政策旁路 + 元信息写入 Gist `dashboard.json`；`AI_PROVIDER` 默认 `none`，不调 AI | 手动迭代                 |
 | `automation/send_report.py`                 | Bark推送脚本（非交易日自动跳过，report.txt全文塞body，POST避免URL长度限制；APNs单条payload约4KB上限，超长可能截断——已知风险，按选择全文优先） | 手动迭代                 |
 | `workers/ds-scan-trigger/src/index.js`（2026-07-20 前：`automation/cf_worker_trigger.js`） | Cloudflare Worker 定时触发器（部署在 CF，本文件为源码存档；2026-07-20 起接入 Workers Builds Git 自动部署） | 手动迭代 |
 | `data/etf_pool.json` / `data/holdings.json` | Gist 镜像的本地历史快照（不可据此判断当前状态）              | 脚本自动写回（线上跑）   |
 | `data/etf_base_config.json`                 | 板块政策基础分（0-15分），低频手动维护                       | 手动，重大政策事件后更新 |
 | `data/etf_base_config/`                     | base分评分指南与提示词（GEMINI_UPDATE_GUIDE / PROMPT_FOR_GEMINI） | 低频手动                 |
-| `index.html`                                | 持仓管理 + AI分析看板（合一），访问 stock.bailuzun.com。壳页面，逻辑都在 `js/` | 手动迭代                 |
+| `index.html`                                | 持仓管理 + 看板（合一），访问 stock.bailuzun.com。壳页面，逻辑都在 `js/` | 手动迭代                 |
 | `js/api.js`                                 | Gist 读写封装（`GistClient`/`GistApiError`/`parseJson`/`parseJsonl`），不碰 DOM | 手动迭代                 |
 | `js/decision.js`                            | 纯函数：动作优先级排序、dashboard 新鲜度判断                 | 手动迭代                 |
 | `js/app.js`                                 | 主逻辑：渲染、持仓登记、扫描器建议匹配（三态）、执行事件构建与写回。~2400行，DOM/状态/业务规则都在这一个文件里 | 手动迭代                 |
@@ -111,7 +114,7 @@ index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
 | -------------------------------- | ------------------------------------------------------------ | --------------------------- |
 | `etf_pool.json`                  | ETF池policy总分（base+tech+strength），每日跑完自动写回      | 脚本全自动                  |
 | `holdings.json`                  | 当前持仓（现金、代码、数量、成本、买入日期）                 | 网页手动维护                |
-| `dashboard.json`                 | AI看板：report原文 + Gemini分析 + `decision.operations`（扫描器权威操作清单，结构化字段，前端靠这个做"三态"匹配，不是解析 report 里的 markdown 表格） + 生成时间/模型/方法论版本 | generate_dashboard.py全自动 |
+| `dashboard.json`                 | 看板数据：report原文 + `ai`/`audit`（当前 enabled:false） + `decision.operations`（扫描器权威操作清单，结构化字段，前端靠这个做"三态"匹配，不是解析 report 里的 markdown 表格） + 生成时间/模型/方法论版本 | generate_dashboard.py全自动 |
 | `execution_events_<年>.jsonl`    | 买卖/改资金/更正 的完整台账，append-only，一行一个 JSON 事件。`event_type` 有 `BUY`/`ADD`/`REDUCE`/`SELL`/`CASH_UPDATE`/`CORRECT_REASON`/`REVERSE_EVENT`。**从不原地改历史记录**——纠错是追加一条 `CORRECT_REASON` 事件（带 `target_event_id`/`previous_rule_code`），展示层再把最新更正结果盖在原记录上；撤销同理，追加 `REVERSE_EVENT` | 网页写（`js/app.js` 的 `buildExecutionEvent`/`persistExecution`） |
 | `data_manifest.json`             | 上面几个 jsonl 文件的元信息（row_count/content_bytes/content_sha256/last_event_id），每次写 execution_events 时同步重算 | 网页自动同步写             |
 | `stats.json` / `observer_state.json` | 方法论有效性统计 / 观察器状态                             | 自动化脚本写                |
@@ -158,9 +161,10 @@ index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
 | `DS_SCANNER_GIST_ID`            | Gist ID（32位）                                              |
 | `GITHUB_TOKEN`                  | 有 gist scope 的 PAT，Secret名为 `GH_PAT`                    |
 | `BARK_KEY`                      | Bark App 推送key（不带 `https://api.day.app/` 前缀，与fund-monitor同一套） |
-| `GEMINI_API_KEY`                | Google AI Studio 免费API Key，`generate_dashboard.py`用      |
-| `GEMINI_MODEL`（可选）          | 默认`gemini-3.5-flash`（免费层可用）；不配置则用默认值，用于后续切换模型对比质量 |
-| `GEMINI_THINKING_LEVEL`（可选） | 默认`high`（minimal/low/medium/high，控制推理深度/成本，high=免费层最高等级）；仅3.x系列支持，切回2.x模型需清空 |
+| `AI_PROVIDER`（可选）           | `none`（默认，`scan.yml` 显式传入）/ `gemini` / `deepseek`。**每日流程恒为 none**，下面几个 AI 变量因此当前都不生效，仅手动调试时才需要 |
+| `GEMINI_API_KEY`                | Google AI Studio 免费API Key；仅 `AI_PROVIDER=gemini` 时使用 |
+| `GEMINI_MODEL`（可选）          | 默认`gemini-3.5-flash`（免费层可用）；用于切换模型对比质量   |
+| `GEMINI_THINKING_LEVEL`（可选） | 默认`high`（minimal/low/medium/high，控制推理深度/成本）；仅3.x系列支持，切回2.x模型需清空 |
 
 ---
 
@@ -189,18 +193,47 @@ index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
 
 ---
 
-## 交易规则速查索引（规则一律读 X-Plan.md，本文件不展开）
+## 交易规则去哪查
 
-| 规则                                                 | 位置（X-Plan.md） |
-| ---------------------------------------------------- | ----------------- |
-| 开仓：三道金牌 + 四维评分 + 仓位对应                 | 模块2 / 模块7     |
-| 止损止盈：三道防线 + 梯度/动态止盈                   | 模块3             |
-| 持仓-新信号冲突矩阵                                  | 模块4             |
-| 异常情况SOP                                          | 模块5             |
-| 资金/仓位硬约束、加仓管理                            | 模块6             |
-| 选品白/黑名单、爆发力评级                            | 模块8             |
-| 熔断与转实盘（毕业）条件                             | 模块9             |
-| 扫描器policy分实现（base/tech/strength、软止损阈值） | 附录A             |
+**规则一律读 `X-Plan.md`，它自己的章节标题就是索引，本文件不再维护第二份。**
+
+> **这里曾有一张「交易规则速查索引」表，2026-07-27 删除。** 它是 v2.x 的化石：
+> v3.0 重写方法论（2026-07-09）时没同步，实测表里 10 个概念有 9 个
+> （三道金牌／三道防线／冲突矩阵／异常情况SOP／白名单／黑名单／附录A／毕业／熔断）
+> 在 `X-Plan.md` 里**零命中**，模块号也几乎全错——索引说"止损止盈→模块3"，
+> 实际模块3是「B/A/S 信号分级」；说"熔断与转实盘→模块9"，实际模块9是「输出与数据契约」。
+>
+> **教训**：给规则造第二个出处，它一定会烂，而烂索引比没索引更坏——它会把人导向错的地方
+> 却看不出错。旧表内容在 git 历史里，需要考古用
+> `git log -- CLAUDE.md` 找到删除前那次提交。
+
+---
+
+## 归档层的处置（`plans/`，待拍板）
+
+参照 `fund-monitor` 的文档纪律：**归档层本身也需要维护，否则它会烂，而它烂掉的方式是看不出来的。**
+那个项目已于 2026-07-26 删掉自己的 `docs/archive/` 与 `DECISIONS.md`，历史全部交给 git。
+
+本仓库 `plans/` 现状（2026-07-27 逐份复核）：
+
+| 文件 | 是什么 | 复核状态 | 建议 |
+| --- | --- | --- | --- |
+| `action-1-fail-loud.md` | "让系统会喊疼"执行指导书 | 已完成上线 | 删（git 里有） |
+| `dead-code-candidates-2026-07-10.md` | 死代码扫描结果 | **6条已烂5条**，已加过期标记 | 处理完唯一存活项后删 |
+| `gemini-api-shadow-archive.md` | Gemini 转正方案 | 已放弃；且内容已过期（写着"正式 provider 是 DeepSeek"，实际是 `none`） | 删 |
+| `review-prompt-full-system-audit.md` | 可复用的全系统审查 meta-prompt | **是活工具，不是归档** | 留，但不该放 `plans/` |
+| `version-history-archive.md` | 本文件 changelog 的归档 | 在用（本文件版本记录只留最近2条） | 留 or 交给 git，待定 |
+
+唯一存活的死代码：`automation/gemini_reliability_check.py`（无任何引用，`scan.yml` 不调用，
+`AI_PROVIDER` 默认 `none` 连日常 AI 审计都没启用）。建议删除，理由与依据见该清单文件末尾。
+
+**以上均未擅自执行**——本仓库约定文件/代码删除由大亨拍板。删除后要取回：
+
+```bash
+git log --diff-filter=D --format='%h %ad' --date=short -1 -- plans/xxx.md
+```
+
+拿到 hash 后 `git show <hash>^:plans/xxx.md` 即全文。
 
 ---
 
@@ -208,9 +241,9 @@ index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
 
 ```
 14:49  Cloudflare Worker 自动触发 Actions（cron: 49 6 * * MON-FRI，UTC）
-~14:51 Gemini自动分析完成，写入Gist dashboard.json
-~14:53 收到Bark推送（带badge红点），打开 index.html 查看AI分析（干货，默认展开）
-~14:55 人工决策确认（Gemini分析失败时，仍可长按Bark通知复制report全文发给DeepSeek/Gemini手动分析）
+~14:51 generate_dashboard.py 写回 Gist dashboard.json（不调用AI）
+~14:53 收到Bark推送（带badge红点），打开 index.html 看扫描器操作清单
+~14:55 人工决策确认（需要二次分析时，长按Bark通知复制report全文手动喂给AI）
 14:55-15:00  尾盘执行
 收盘后  更新 holdings.json（stock.bailuzun.com）
 ```
@@ -219,13 +252,13 @@ index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
 
 ## 前端页面（GH Pages，stock.bailuzun.com）
 
-单页 `index.html`（持仓管理 + AI看板合一），自上而下：
+单页 `index.html`（持仓管理 + 看板合一），自上而下：
 
 | 区块                       | 功能                                                         |
 | -------------------------- | ------------------------------------------------------------ |
 | 持仓管理（置顶）           | 可用资金/持仓列表，买入建仓（代码自动联想补全池内ETF）/ 减仓（自动标记`is_reduced: true`）/ 清仓（删除记录）/ 修改数量、成本、买入日期，所有操作实时写回Gist `holdings.json` + `execution_events_<年>.jsonl`（见上"三态"匹配） |
-| 🤖 今日AI分析（默认展开）   | Gemini回复全文（标准回复格式=持仓指令/新机会/执行窗口，即"干货"），含止损/开仓信号高亮徽章 |
-| 📡 原始扫描数据（默认折叠） | report.txt原文；AI分析失败时自动展开作人工兜底               |
+| 🤖 今日AI审计（当前停用）   | `AI_PROVIDER=none` 时显示"每日AI审计已停用／操作清单由扫描器确定性生成"并折叠。启用时才渲染审计全文 |
+| 📡 原始扫描数据（默认折叠） | report.txt原文；无 decision 或 AI 异常时自动展开作人工兜底   |
 
 GitHub Token + Gist ID 存浏览器localStorage，登录一次后自动读取。
 

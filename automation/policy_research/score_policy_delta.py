@@ -19,6 +19,9 @@ else:
 
 BASE_CONFIG = common.ROOT / "data" / "etf_base_config.json"
 
+# 发布日期存疑的事件最高只能拿到的衰减权重（等同于"已过一个半衰期"）
+ESTIMATED_DATE_MAX_MULTIPLIER = 0.5
+
 
 def load_base_scores() -> Dict[str, int]:
     config = common.load_json(BASE_CONFIG, {})
@@ -67,10 +70,16 @@ def decay_multiplier(event: Dict, as_of: datetime) -> float:
     age_days = max(0, (as_of.date() - published.date()).days)
     half_life = max(1, int(event.get("half_life_days") or 10))
     if age_days <= half_life:
-        return 1.0
-    if age_days <= half_life * 2:
-        return 0.5
-    return 0.25
+        multiplier = 1.0
+    elif age_days <= half_life * 2:
+        multiplier = 0.5
+    else:
+        multiplier = 0.25
+    if event.get("published_at_estimated"):
+        # 发布日期没抓到 → published_at 只能填当天，age 恒为0、权重恒为满分，
+        # 下面这整套半衰期就被架空了。日期存疑就不发满权重。
+        multiplier = min(multiplier, ESTIMATED_DATE_MAX_MULTIPLIER)
+    return multiplier
 
 
 def effective_event_delta(event: Dict, as_of: datetime) -> float:
@@ -108,6 +117,8 @@ def aggregate_deltas(events: List[Dict], as_of: datetime) -> Dict[str, Dict]:
                     "raw_delta": raw,
                     "effective_delta": round(effective, 2),
                     "confidence": event.get("confidence"),
+                    "published_at": event.get("published_at"),
+                    "published_at_estimated": bool(event.get("published_at_estimated")),
                     "expires_at": event.get("expires_at"),
                     "sources": event.get("sources", [])[:3],
                 }
@@ -170,7 +181,9 @@ def run_score(days: int = 90, as_of_text: str | None = None) -> Dict:
     report = {
         "generated_at": common.now_str(),
         "as_of": as_of.strftime("%Y-%m-%d"),
-        "mode": "research_only_no_write_to_etf_base_config",
+        # delta 由扫描器在运行时叠加到 base 分上，但绝不回写 etf_base_config.json
+        # ——那个文件是人工维护的真理源，自动化只能在运行时加偏移，不能改它
+        "mode": "runtime_delta_no_write_to_etf_base_config",
         "event_count": len(events),
         "themes": themes,
         "monthly_base_suggestions": monthly_base_suggestions(events, as_of),

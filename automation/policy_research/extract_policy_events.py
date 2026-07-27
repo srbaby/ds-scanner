@@ -108,7 +108,13 @@ def extract_events(raw_rows: List[Dict]) -> List[Dict]:
         strength = evidence_strength(title, raw.get("source_rank", ""), action, direction, config)
         if strength <= 0:
             continue
-        published = common.parse_date(raw.get("published_at")) or datetime.now()
+        published = common.parse_date(raw.get("published_at"))
+        published_estimated = published is None
+        if published_estimated:
+            # 采集端没拿到发布日期时只能以"今天"落账，但必须留下标记：
+            # 事件目录在 Actions 里是一次性的，不标记就会每天被重刷成"今天发布"，
+            # 衰减权重永远是1.0，score_policy_delta 的半衰期/过期形同虚设。
+            published = datetime.now()
         decay = default_decay(raw.get("source_rank", ""), action)
         key = common.stable_id(normalize_title(title), ",".join(sorted(themes)), direction, action)
         event = by_key.get(key)
@@ -123,6 +129,7 @@ def extract_events(raw_rows: List[Dict]) -> List[Dict]:
                 "event_id": key,
                 "created_at": common.now_str(),
                 "published_at": published.strftime("%Y-%m-%d"),
+                "published_at_estimated": published_estimated,
                 "title": title,
                 "themes": themes,
                 "direction": direction,

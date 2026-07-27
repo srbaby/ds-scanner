@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from datetime import datetime
 from typing import Dict, List
@@ -37,6 +38,63 @@ def item_matches(title: str, keywords: Dict) -> bool:
     return common.contains_any(title, all_keywords)
 
 
+# 政务列表页几乎都会在链接旁标注发布日期，URL 里也常内嵌 /202607/t20260710_ 这类日期段。
+URL_DATE_PATTERNS = (
+    re.compile(r"[t_](20\d{2})(\d{2})(\d{2})\D"),
+    re.compile(r"/(20\d{2})[-_/](\d{1,2})[-_/](\d{1,2})(?:\D|$)"),
+)
+MAX_PUBLISHED_AGE_DAYS = 1095
+
+
+def date_from_url(url: str):
+    """从 URL 路径里解析发布日期；只有年月的形态（/202607/）取不到日，不算。"""
+    for pattern in URL_DATE_PATTERNS:
+        match = pattern.search(url or "")
+        if not match:
+            continue
+        try:
+            return datetime(
+                int(match.group(1)), int(match.group(2)), int(match.group(3))
+            )
+        except ValueError:
+            continue
+    return None
+
+
+def date_from_neighbourhood(anchor, title: str):
+    """在链接周围找发布日期：逐层上溯父容器，并剔除标题自身文字避免误读。"""
+    node = anchor
+    for _ in range(3):
+        node = getattr(node, "parent", None)
+        if node is None:
+            break
+        text = common.compact_text(node.get_text(" "), 400)
+        if title:
+            text = text.replace(title, " ")
+        found = common.parse_date(text)
+        if found:
+            return found
+    return None
+
+
+def resolve_published_at(anchor, url: str, title: str, today: datetime = None):
+    """确定发布日期，取不到返回 None——绝不用"今天"顶替。
+
+    早期实现把 published_at 直接写死 None，下游 extract_policy_events 再兜底成
+    datetime.now()，导致每次跑都把事件重新标成"今天发布"，age 恒为0、衰减权重恒
+    为1.0，score_policy_delta 里整套半衰期/过期逻辑成了死代码。2026-07-27 证券ETF
+    那条"账户管理功能优化试点"就是这样从上线起一直挂在满权重不动。
+    """
+    today = today or datetime.now()
+    for candidate in (date_from_url(url), date_from_neighbourhood(anchor, title)):
+        if not candidate:
+            continue
+        age_days = (today.date() - candidate.date()).days
+        if 0 <= age_days <= MAX_PUBLISHED_AGE_DAYS:
+            return candidate
+    return None
+
+
 def extract_links(source: Dict, html: str, keywords: Dict) -> List[Dict]:
     soup = BeautifulSoup(html, "html.parser")
     rows = []
@@ -50,6 +108,7 @@ def extract_links(source: Dict, html: str, keywords: Dict) -> List[Dict]:
             continue
         if not item_matches(title, keywords):
             continue
+        published = resolve_published_at(anchor, url, title)
         row = {
             "raw_id": common.stable_id(source["id"], url, title),
             "collected_at": common.now_str(),
@@ -59,7 +118,7 @@ def extract_links(source: Dict, html: str, keywords: Dict) -> List[Dict]:
             "region": source.get("region", ""),
             "title": title,
             "url": url,
-            "published_at": None,
+            "published_at": published.strftime("%Y-%m-%d") if published else None,
             "summary": "",
         }
         rows.append(row)

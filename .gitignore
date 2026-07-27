@@ -19,6 +19,9 @@ decision.json
 # Claude Code 本地会话设置
 .claude/
 
+# wrangler 本地缓存（账户选择等），非代码
+.wrangler/
+
 # 本地 AI 助手工作目录
 .workbuddy/
 

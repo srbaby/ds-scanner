@@ -130,7 +130,7 @@ index.html（GH Pages，stock.bailuzun.com，持仓管理+AI看板合一）
 | 准时性   | 实测分钟级（GitHub 自带 cron 延时数小时，已弃用）；iOS 快捷指令已退役（2026-06-11） |
 
 > **排班归中控管，不在本仓库。** 几点唤醒、唤醒哪个 action，全在 `srbaby/Master-Scheduler`——
-> 那是**独立的私有仓库**（本地 `D:\Projects\Master-Scheduler`），账户级基础设施，同时服务本项目与基金看板。
+> 那是**独立的私有仓库**（本地 `~/Projects/Master-Scheduler`），账户级基础设施，同时服务本项目与基金看板。
 > 本仓库只管收到唤醒之后做什么。**要改时间点去那个仓库改并重新部署，别在这里找。**
 >
 > 该仓库私有是有原因的：它的 README 含 CF 绑定清单与 `/test` 后门地址，而 `ds-scanner` 与 `fund-monitor`
@@ -244,5 +244,5 @@ python3 automation/ds_scanner.py --refresh-policy
 
 | 版本                    | 日期       | 核心变更                                                     |
 | ----------------------- | ---------- | ------------------------------------------------------------ |
+| master-scheduler 补静默日志 | 2026-07-27 | 07-27 中午12:00那次 scan 漏触发（GitHub Actions 与 Gist 均无对应记录），排查发现 `master-scheduler`（独立仓库，见下"排班归中控管"）的 `scheduled()` 从不打日志，即使漏调用也无法事后回溯；14:49 现场蹲守确认链路本身健康（`wrangler tail` 抓到 `dispatch -> 204 OK`）。修复：仅在实际命中 5 个排班点时 `console.log` 结果（不刷屏 idle tick），并把 `wrangler.toml` 里占位的 `compatibility_date` 换成经 Cloudflare API 核对过的线上真实值 `2026-06-24`。改动在 `Master-Scheduler` 仓库，已部署 |
 | 前端测试修复（扫描恢复） | 2026-07-20 | 07-19 改回普通 script 后未同步改前端测试，`scan.yml` 第一步回归测试必挂，扫描自 07-19 起连续失败 3 次（含 07-20 午间）。修复：`test_app.js` 把"断言必须是 module"反转为"出现 module 即失败"的 guard；两个测试改用 `vm` 共享 context 按序加载三个脚本，不再走 ESM `import`；结构比较改宽松 `deepEqual` 避开跨 realm 原型误报。详见上"已知坑"第4条 |
-| file:// 本地测试修复 + 数据修正 | 2026-07-19 | ① `js/api.js`/`js/decision.js` 从 ES module 改回普通 script（修复 07-15 引入的 file:// CORS 登录失败）；② 修复 `data-reason` 属性用 `escapeHtml` 未转义引号导致的 JSON 静默损坏（详见上"已知坑"第3条），这是 07-10/07-13/07-14 三笔交易被误标 `MANUAL_BACKFILL` 的真实根因；③ 用 `CORRECT_REASON` 事件在 Gist 里补上这三笔的正确归因；④ 修桌面表格"实仓→目标"列宽不够导致换行/撑高卡片的问题 |

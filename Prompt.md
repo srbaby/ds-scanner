@@ -1,6 +1,6 @@
 # X-Plan AI Audit Prompt v3.1
 
-> 方法论版本：v3.1
+> 方法论版本：v3.2
 >
 > Prompt 契约版本：v3.1
 >

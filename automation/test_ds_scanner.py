@@ -324,5 +324,271 @@ class ScannerDecisionTests(unittest.TestCase):
         self.assertFalse(any(op["action"] == "BUY" for op in decision["operations"]))
 
 
+class PolicyDeltaInputTests(unittest.TestCase):
+    """政策事件必须真的进四维评分（2026-07-27 前政策跑在扫描器下游，对建议零影响）。"""
+
+    def _delta_file(self, tmpdir, as_of, themes):
+        import json
+        import os
+
+        path = os.path.join(tmpdir, "last_delta.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"as_of": as_of, "themes": themes}, f)
+        return path
+
+    def test_fresh_delta_is_loaded(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._delta_file(
+                tmpdir, "2026-07-27", {"证券": {"active_delta": 1}, "煤炭": {"active_delta": 0}}
+            )
+            with patch.object(ds_scanner, "POLICY_DELTA_FILE", path):
+                state = ds_scanner.load_policy_deltas(today=date(2026, 7, 27))
+        self.assertTrue(state["ok"])
+        self.assertEqual(state["deltas"], {"证券": 1})
+
+    def test_stale_delta_is_rejected_with_reason(self):
+        """政策流水线在 scan.yml 里是 continue-on-error，挂了不能拿旧数据顶。"""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._delta_file(tmpdir, "2026-07-01", {"证券": {"active_delta": 2}})
+            with patch.object(ds_scanner, "POLICY_DELTA_FILE", path):
+                state = ds_scanner.load_policy_deltas(today=date(2026, 7, 27))
+        self.assertFalse(state["ok"])
+        self.assertEqual(state["deltas"], {})
+        self.assertIn("过期", state["reason"])
+
+    def test_missing_delta_file_degrades_without_raising(self):
+        with patch.object(ds_scanner, "POLICY_DELTA_FILE", "/nonexistent/last_delta.json"):
+            state = ds_scanner.load_policy_deltas(today=date(2026, 7, 27))
+        self.assertFalse(state["ok"])
+        self.assertEqual(state["deltas"], {})
+
+    def test_delta_is_clamped_into_base_range(self):
+        adjusted, applied = ds_scanner.apply_policy_deltas(
+            {"证券": 8, "半导体": 15, "煤炭": 0, "_meta": "忽略"},
+            {"证券": 1, "半导体": 2, "煤炭": -2},
+        )
+        self.assertEqual(adjusted["证券"], 9)
+        self.assertEqual(adjusted["半导体"], 15)  # 已到上限，加不上去
+        self.assertEqual(adjusted["煤炭"], 0)  # 已到下限，减不下去
+        # 实际生效量是夹紧之后的差值，base_score - applied 必须能还原原值
+        self.assertEqual(applied, {"证券": 1})
+
+    def test_policy_delta_moves_the_four_dimensional_score(self):
+        days = [date.today() - timedelta(days=value) for value in range(30, 0, -1)]
+        history = pd.DataFrame(
+            {
+                "date": days,
+                "open": [1 + i * 0.001 for i in range(30)],
+                "high": [1.01 + i * 0.001 for i in range(30)],
+                "low": [0.99 + i * 0.001 for i in range(30)],
+                "close": [1 + i * 0.001 for i in range(30)],
+                "volume": [1000.0] * 30,
+            }
+        )
+        realtime = {
+            "sh512880": {
+                "price": 1.05,
+                "last_close": 1.029,
+                "change_pct": 2.0,
+                "volume": 1500,
+            }
+        }
+        pool = {
+            "sh512880": {
+                "name": "证券ETF",
+                "category": "证券",
+                "policy": 20,
+                "_breakdown": {"base": 8},
+            }
+        }
+
+        def scan(base_scores, deltas):
+            with patch.object(ds_scanner, "fetch_sina_history", return_value=history):
+                return ds_scanner.scan_etf_pool(
+                    pool, set(), realtime, base_scores, 0.5, deltas
+                )[0]
+
+        plain = scan({"证券": 8}, {})
+        adjusted, applied = ds_scanner.apply_policy_deltas({"证券": 8}, {"证券": 1})
+        with_policy = scan(adjusted, applied)
+
+        # base 分 +1 → 政策催化位 +2 → 四维总分 +2
+        self.assertEqual(with_policy["policy_delta"], 1)
+        self.assertEqual(with_policy["base_score_before_policy"], 8)
+        self.assertEqual(with_policy["base_score"], 9)
+        self.assertEqual(
+            with_policy["score"]["policy_catalyst"] - plain["score"]["policy_catalyst"], 2
+        )
+        self.assertEqual(with_policy["score"]["total"] - plain["score"]["total"], 2)
+        # 政策不碰 policy 总分，因此不可能触发/压制 RISK_STOP
+        self.assertEqual(with_policy["policy"], plain["policy"])
+
+    def test_report_section_states_when_policy_did_not_apply(self):
+        lines = ds_scanner.policy_adjustment_section(
+            [], {"ok": False, "reason": "政策数据已过期（2026-07-01，距今26天）", "deltas": {}}
+        )
+        text = "\n".join(lines)
+        self.assertIn("政策数据已过期", text)
+        self.assertIn("纯手工 base 分", text)
+
+    def test_report_section_lists_touched_symbols(self):
+        rows = [
+            {
+                "name": "证券ETF",
+                "category": "证券",
+                "base_score": 9,
+                "base_score_before_policy": 8,
+                "policy_delta": 1,
+                "score": {"policy_catalyst": 18, "total": 61},
+            }
+        ]
+        text = "\n".join(
+            ds_scanner.policy_adjustment_section(
+                rows, {"ok": True, "as_of": "2026-07-27", "applied": {"证券": 1}}
+            )
+        )
+        self.assertIn("证券 +1", text)
+        self.assertIn("8→9", text)
+
+
+def split_history(bars=30, break_at=15, pre=1.75, post=1.16, slope=0.005):
+    """构造一段含份额折算断层的原始K线：断层前后价格体系不连续。"""
+    closes = []
+    for i in range(bars):
+        if i < break_at:
+            closes.append(round(pre - i * slope, 4))
+        else:
+            closes.append(round(post - (i - break_at) * slope, 4))
+    days = [date.today() - timedelta(days=value) for value in range(bars, 0, -1)]
+    return pd.DataFrame(
+        {
+            "date": days,
+            "open": closes,
+            "high": [round(value * 1.01, 4) for value in closes],
+            "low": [round(value * 0.99, 4) for value in closes],
+            "close": closes,
+            "volume": [1000.0] * bars,
+        }
+    )
+
+
+class PriceDiscontinuityTests(unittest.TestCase):
+    """份额折算断层修正（2026-07-27 半导体ETF MA20偏离-29.64%却判"有效"）。"""
+
+    def test_split_is_detected_and_series_becomes_continuous(self):
+        raw = split_history()
+        fixed, breaks = ds_scanner.repair_price_discontinuity(raw)
+
+        self.assertEqual(len(breaks), 1)
+        self.assertLess(breaks[0]["ratio"], 0.75)
+
+        closes = fixed["close"].tolist()
+        jumps = [
+            abs(closes[i] / closes[i - 1] - 1) for i in range(1, len(closes))
+        ]
+        self.assertLess(max(jumps), ds_scanner.PRICE_JUMP_RATIO_LIMIT)
+        # 断层之后的K线不该被动过
+        self.assertAlmostEqual(closes[-1], raw["close"].tolist()[-1], places=6)
+
+    def test_ma20_is_repaired_into_a_plausible_band(self):
+        raw = split_history()
+        raw_ma20 = float(raw["close"].tail(20).mean())
+        fixed, _ = ds_scanner.repair_price_discontinuity(raw)
+        fixed_ma20 = float(fixed["close"].tail(20).mean())
+        price = float(raw["close"].iloc[-1])
+
+        # 修正前 MA20 被断层前的高价体系拉高，偏离度严重失真
+        self.assertLess((price / raw_ma20 - 1) * 100, -10)
+        # 修正后回到可信区间
+        self.assertGreater((price / fixed_ma20 - 1) * 100, -5)
+
+    def test_normal_history_is_returned_untouched(self):
+        days = [date.today() - timedelta(days=value) for value in range(30, 0, -1)]
+        raw = pd.DataFrame(
+            {
+                "date": days,
+                "open": [1 + i * 0.001 for i in range(30)],
+                "high": [1.01 + i * 0.001 for i in range(30)],
+                "low": [0.99 + i * 0.001 for i in range(30)],
+                "close": [1 + i * 0.001 for i in range(30)],
+                "volume": [1000.0] * 30,
+            }
+        )
+        fixed, breaks = ds_scanner.repair_price_discontinuity(raw)
+        self.assertEqual(breaks, [])
+        self.assertIs(fixed, raw)
+
+    def test_limit_move_is_not_mistaken_for_a_split(self):
+        """单日20%涨跌停是真实行情，不能当成折算去缩放。"""
+        raw = split_history(break_at=15, pre=1.30, post=1.079, slope=0.0)
+        # 1.30 → 1.079 相当于单日 -17%，在涨跌停可能范围内
+        _, breaks = ds_scanner.repair_price_discontinuity(raw)
+        self.assertEqual(breaks, [])
+
+    def test_volume_is_adjusted_inversely_to_price(self):
+        raw = split_history()
+        raw_closes = raw["close"].tolist()
+        # breaks 里的 ratio 是展示用的四舍五入值，期望值要用原始收盘价算
+        ratio = raw_closes[15] / raw_closes[14]
+        fixed, _ = ds_scanner.repair_price_discontinuity(raw)
+        volumes = fixed["volume"].tolist()
+        self.assertAlmostEqual(volumes[0], 1000.0 / ratio, places=6)
+        self.assertAlmostEqual(volumes[-1], 1000.0, places=6)
+
+    def test_adjusted_symbol_stays_valid_and_is_flagged(self):
+        raw = split_history()
+        history, breaks = ds_scanner.repair_price_discontinuity(raw)
+        history.attrs["price_breaks"] = breaks
+        realtime = {
+            "sh512480": {
+                "price": float(raw["close"].iloc[-1]),
+                "last_close": float(raw["close"].iloc[-1]),
+                "change_pct": -0.9,
+                "volume": 1200,
+            }
+        }
+        pool = {
+            "sh512480": {
+                "name": "半导体ETF",
+                "category": "半导体",
+                "policy": 30,
+                "_breakdown": {"base": 15},
+            }
+        }
+        with patch.object(ds_scanner, "fetch_sina_history", return_value=history):
+            rows = ds_scanner.scan_etf_pool(
+                pool, set(), realtime, {"半导体": 15}, index_change=0
+            )
+
+        quality = rows[0]["data_quality"]
+        # 断层已修正 → 不能因此被判死，但要留痕
+        self.assertTrue(quality["valid"])
+        self.assertEqual(quality["issues"], [])
+        self.assertEqual(len(quality["adjustments"]), 1)
+        self.assertGreater(rows[0]["ma20_deviation_pct"], -10)
+
+    def test_quality_label_distinguishes_adjusted_from_clean(self):
+        self.assertEqual(
+            ds_scanner.data_quality_label({"valid": True, "issues": [], "adjustments": []}),
+            "有效",
+        )
+        self.assertEqual(
+            ds_scanner.data_quality_label(
+                {"valid": True, "issues": [], "adjustments": [{"ratio": 0.69}]}
+            ),
+            "有效(已复权1处)",
+        )
+        self.assertEqual(
+            ds_scanner.data_quality_label(
+                {"valid": False, "issues": ["ABNORMAL_MA20_DEVIATION"], "adjustments": []}
+            ),
+            "ABNORMAL_MA20_DEVIATION",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

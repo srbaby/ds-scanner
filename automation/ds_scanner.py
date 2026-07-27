@@ -32,7 +32,7 @@ import math
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -253,6 +253,77 @@ def load_base_scores():
         return DEFAULT_BASE_SCORES
 
 
+# 政策事件对主题 base 分的调整量，由 policy_research 流水线产出（已在源头夹紧到 ±2）
+POLICY_DELTA_FILE = "data/policy_research/snapshots/last_delta.json"
+# delta 超过这个天数就不用了：policy_research 在 scan.yml 里是 continue-on-error，
+# 它挂了不能让扫描器拿着上周的政策当今天的用
+POLICY_DELTA_MAX_AGE_DAYS = 3
+
+
+def load_policy_deltas(today: date = None) -> Dict:
+    """读取政策事件对各主题 base 分的调整量。
+
+    返回 {"ok", "as_of", "deltas", "reason"}。取不到或过期时 deltas 为空——
+    政策数据缺失只会退回纯手工 base 分，绝不阻断扫描，但必须在报告里说明白
+    （静默降级成"看起来正常的值"是本项目吃过大亏的地方）。
+    """
+    today = today or datetime.now().date()
+    if not os.path.exists(POLICY_DELTA_FILE):
+        return {"ok": False, "as_of": None, "deltas": {}, "reason": "政策数据文件缺失"}
+    try:
+        with open(POLICY_DELTA_FILE, "r", encoding="utf-8") as f:
+            report = json.load(f)
+    except Exception as exc:
+        return {"ok": False, "as_of": None, "deltas": {}, "reason": f"政策数据读取失败: {exc}"}
+
+    as_of_text = report.get("as_of")
+    try:
+        as_of = datetime.strptime(str(as_of_text), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return {"ok": False, "as_of": as_of_text, "deltas": {}, "reason": "政策数据缺少有效 as_of"}
+
+    age_days = (today - as_of).days
+    if age_days < 0 or age_days > POLICY_DELTA_MAX_AGE_DAYS:
+        return {
+            "ok": False,
+            "as_of": as_of_text,
+            "deltas": {},
+            "reason": f"政策数据已过期（{as_of_text}，距今{age_days}天）",
+        }
+
+    deltas = {}
+    for theme, row in (report.get("themes") or {}).items():
+        active = int((row or {}).get("active_delta") or 0)
+        if active:
+            deltas[theme] = active
+    return {"ok": True, "as_of": as_of_text, "deltas": deltas, "reason": ""}
+
+
+def apply_policy_deltas(base_scores: Dict, deltas: Dict):
+    """把政策 delta 叠加到手工 base 分上，夹紧在 0-15。
+
+    返回 (调整后的分数表, 实际生效量)。实际生效量是夹紧之后的差值，
+    因此 base_score - applied 一定等于调整前的原值，报告里可以直接反推。
+    """
+    adjusted = dict(base_scores or {})
+    applied = {}
+    for theme, value in (base_scores or {}).items():
+        if str(theme).startswith("_"):
+            continue
+        try:
+            raw = int(value)
+        except (TypeError, ValueError):
+            continue
+        delta = int((deltas or {}).get(theme) or 0)
+        if not delta:
+            continue
+        new_value = max(0, min(15, raw + delta))
+        adjusted[theme] = new_value
+        if new_value != raw:
+            applied[theme] = new_value - raw
+    return adjusted, applied
+
+
 def generate_base_config_template():
     """生成板块基础分配置模板"""
     template = {
@@ -461,6 +532,90 @@ def fetch_realtime(codes: List[str]) -> Dict:
     return results
 
 
+# A股ETF单日涨跌幅上限20%（科创/创业板相关标的），跨境ETF略宽但也远达不到此值。
+# 单日收盘价跳变超过此比例，只可能是份额折算/拆分，不可能是真实行情。
+PRICE_JUMP_RATIO_LIMIT = 0.25
+
+
+def repair_price_discontinuity(df: Optional[pd.DataFrame]):
+    """前复权修正份额折算/拆分造成的价格断层。
+
+    fetch_sina_history 用的 ak.fund_etf_hist_sina 不复权、也没有 adjust 参数。
+    份额折算日会出现单日几十个百分点的收盘价跳变；只要断层落进MA20窗口，
+    MA20 就被永久拉偏，而 history/realtime 的 T-1 收盘校验（close_gap_pct）
+    只比对最后一根K线，完全看不到窗口内部的断层。
+
+    2026-07-27 实例：半导体ETF MA20偏离 -29.64% 却判定"有效"——因为质量阈值是
+    abs>30，它差0.36个百分点漏网（同一现象的通信ETF -31.94% 被拦下）。后果是
+    技术分被压到 4/25，且"现价>MA20"这条开仓硬条件永远不可能满足，一只政策分
+    满分30/30的S级标的被静默除名。
+
+    返回 (修正后的DataFrame, 断层列表)；无断层时原样返回，不复制。
+    """
+    if df is None or df.empty or "close" not in df.columns or len(df) < 2:
+        return df, []
+
+    closes = pd.to_numeric(df["close"], errors="coerce").tolist()
+    factors = [1.0] * len(closes)
+    breaks = []
+    cumulative = 1.0
+
+    # 从最新一根往回走：发现断层就把断层之前的K线整体缩放到"断层之后"的价格体系
+    for i in range(len(closes) - 1, 0, -1):
+        prev_close, curr_close = closes[i - 1], closes[i]
+        if (
+            pd.isna(prev_close)
+            or pd.isna(curr_close)
+            or prev_close <= 0
+            or curr_close <= 0
+        ):
+            factors[i - 1] = cumulative
+            continue
+        ratio = curr_close / prev_close
+        if abs(ratio - 1) > PRICE_JUMP_RATIO_LIMIT:
+            cumulative *= ratio
+            breaks.append(
+                {
+                    "date": str(df.iloc[i].get("date", "")),
+                    "prev_close": round(float(prev_close), 4),
+                    "close": round(float(curr_close), 4),
+                    "ratio": round(float(ratio), 4),
+                }
+            )
+        factors[i - 1] = cumulative
+
+    if not breaks:
+        return df, []
+
+    out = df.copy()
+    factor_series = pd.Series(factors, index=out.index)
+    for column in ("open", "high", "low", "close"):
+        if column in out.columns:
+            out[column] = pd.to_numeric(out[column], errors="coerce") * factor_series
+    # 份额折算后股数反向变化：价格缩到0.7倍，同一笔钱对应的份额约放大1/0.7
+    if "volume" in out.columns:
+        out["volume"] = pd.to_numeric(out["volume"], errors="coerce") / factor_series
+    if "ma5" in out.columns:
+        out["ma5"] = out["close"].rolling(5).mean()
+    if "ma20" in out.columns:
+        out["ma20"] = out["close"].rolling(20).mean()
+    if "vol_ma5" in out.columns:
+        out["vol_ma5"] = out["volume"].rolling(5).mean()
+
+    breaks.reverse()  # 回溯时是倒着找到的，输出按时间正序
+    return out, breaks
+
+
+def data_quality_label(data_quality: Dict) -> str:
+    """报告表格里的"数据质量"列文案：无效优先显示原因，有效时标注是否做过复权修正。"""
+    if not data_quality.get("valid"):
+        return "/".join(data_quality.get("issues") or []) or "无效"
+    adjustments = data_quality.get("adjustments") or []
+    if adjustments:
+        return f"有效(已复权{len(adjustments)}处)"
+    return "有效"
+
+
 def fetch_sina_history(code: str, days: int = 30) -> Optional[pd.DataFrame]:
     """获取历史K线数据"""
     try:
@@ -481,6 +636,9 @@ def fetch_sina_history(code: str, days: int = 30) -> Optional[pd.DataFrame]:
         df["ma5"] = df["close"].rolling(5).mean()
         df["ma20"] = df["close"].rolling(20).mean()
         df["vol_ma5"] = df["volume"].rolling(5).mean()
+
+        df, price_breaks = repair_price_discontinuity(df)
+        df.attrs["price_breaks"] = price_breaks
 
         return df
     except Exception as e:
@@ -514,7 +672,11 @@ def completed_history(history: Optional[pd.DataFrame], today=None) -> Optional[p
     today = today or datetime.now().date()
     dates = pd.to_datetime(out["date"], errors="coerce").dt.date
     out = out.loc[dates < today].copy()
-    return out if not out.empty else None
+    if out.empty:
+        return None
+    # attrs 在部分 pandas 版本的切片链上不保证透传，这里显式带过去
+    out.attrs = dict(history.attrs)
+    return out
 
 
 def calculate_atr(history: pd.DataFrame, period: int = 14) -> float:
@@ -1234,6 +1396,7 @@ def scan_etf_pool(
     realtime: Dict,
     base_scores: Dict = None,
     index_change: float = 0.0,
+    policy_deltas: Dict = None,
 ):
     print("⏳ 正在扫描ETF观察池...")
     etf_list = []
@@ -1244,6 +1407,11 @@ def scan_etf_pool(
         rt = realtime[code]
         history = completed_history(fetch_sina_history(code, 45))
         quality_issues = []
+        # 断层已在 fetch_sina_history 里前复权修正过，属于"已处理"而非"数据无效"，
+        # 因此只记进 adjustments，不进 issues（进 issues 会把标的直接判死）
+        price_adjustments = (
+            list(history.attrs.get("price_breaks") or []) if history is not None else []
+        )
         if rt.get("partial"):
             quality_issues.append("PARTIAL_QUOTE_NO_VOLUME")
         if history is None or len(history) < 20:
@@ -1298,6 +1466,9 @@ def scan_etf_pool(
             or (pool_info.get("_breakdown") or {}).get("base")
             or 0
         )
+        # base_scores 传进来时已经叠加过政策 delta，这里只是把"动了多少"透出去，
+        # 让报告和看板能显示政策的实际贡献（政策进四维评分，不碰 policy 总分/止损）
+        policy_delta = int((policy_deltas or {}).get(pool_info.get("category")) or 0)
         score = calculate_four_dimensional_score(
             configured_base,
             rt["price"],
@@ -1319,6 +1490,8 @@ def scan_etf_pool(
             "category": pool_info["category"],
             "policy": pool_info["policy"],
             "base_score": configured_base,
+            "base_score_before_policy": configured_base - policy_delta,
+            "policy_delta": policy_delta,
             "price": rt["price"],
             "change_pct": rt["change_pct"],
             "vol_ratio": vol_ratio,
@@ -1332,6 +1505,7 @@ def scan_etf_pool(
             "data_quality": {
                 "valid": not quality_issues,
                 "issues": quality_issues,
+                "adjustments": price_adjustments,
                 "history_realtime_close_gap_pct": round(close_gap_pct, 2),
             },
         }
@@ -1682,6 +1856,37 @@ def build_authoritative_decision(
 # ============================================================
 
 
+def policy_adjustment_section(etf_list, policy_state: Dict) -> List[str]:
+    """报告里的"政策事件调整"段：政策到底改了谁的分，一眼可查。"""
+    lines = ["\n## 🏛️ 政策事件调整（计入四维评分的政策催化位）\n"]
+    if not policy_state or not policy_state.get("ok"):
+        reason = (policy_state or {}).get("reason") or "政策数据不可用"
+        lines.append(f"- ⚠️ **{reason}**，本次按纯手工 base 分计算，政策未参与评分")
+        return lines
+
+    lines.append(f"- 政策数据日期：{policy_state.get('as_of')}")
+    applied = policy_state.get("applied") or {}
+    if not applied:
+        lines.append("- 今日无生效的政策调整（事件不足以形成主题偏移，或已衰减到阈值以下）")
+        return lines
+
+    moved = "、".join(f"{theme} {delta:+d}" for theme, delta in sorted(applied.items()))
+    lines.append(f"- 生效主题（base分，上限±2）：{moved}")
+    touched = [row for row in etf_list if row.get("policy_delta")]
+    if touched:
+        lines.append("")
+        lines.append("| 名称 | 板块 | base分 | 政策调整 | 四维政策位 | 四维总分 |")
+        lines.append("|------|------|--------|----------|------------|----------|")
+        for row in sorted(touched, key=lambda item: -item["score"]["total"]):
+            lines.append(
+                f"| {row['name']} | {row['category']} | "
+                f"{row['base_score_before_policy']}→{row['base_score']} | "
+                f"{row['policy_delta']:+d} | {row['score']['policy_catalyst']} | "
+                f"{row['score']['total']} |"
+            )
+    return lines
+
+
 def generate_report_v2(
     market,
     etf_list,
@@ -1690,6 +1895,7 @@ def generate_report_v2(
     total_value,
     cash_available,
     decision=None,
+    policy_state=None,
 ):
     """生成 v3.2 格式报告：服务 v3.1 确定性目标仓位重估。"""
     report = []
@@ -1795,9 +2001,12 @@ def generate_report_v2(
         change_emoji = "🔴" if etf["change_pct"] < 0 else "🟢"
         excess_pct = etf["change_pct"] - index_change_pct
         current_position_pct = holding_position_pct.get(etf["symbol"], 0.0)
+        quality_label = data_quality_label(etf["data_quality"])
         report.append(
-            f"| {etf['symbol']} | {etf['name']} | {etf['price']:.3f} | {change_emoji}{etf['change_pct']:+.2f}% | {etf['vol_ratio']:.2f} | {etf['rsi']:.0f} | {etf['ma20']:.3f} | {etf['ma20_deviation_pct']:+.2f}% | {excess_pct:+.2f}% | {etf['fund_flow']} | {etf['policy']} | {etf['score']['total']}（{etf['score']['policy_catalyst']}/{etf['score']['technical']}/{etf['score']['sentiment_strength']}/{etf['score']['risk_reward']}） | {etf['signal_grade']} | {'有效' if etf['data_quality']['valid'] else '/'.join(etf['data_quality']['issues'])} | {current_position_pct:.1f}% | {etf['position']} |"
+            f"| {etf['symbol']} | {etf['name']} | {etf['price']:.3f} | {change_emoji}{etf['change_pct']:+.2f}% | {etf['vol_ratio']:.2f} | {etf['rsi']:.0f} | {etf['ma20']:.3f} | {etf['ma20_deviation_pct']:+.2f}% | {excess_pct:+.2f}% | {etf['fund_flow']} | {etf['policy']} | {etf['score']['total']}（{etf['score']['policy_catalyst']}/{etf['score']['technical']}/{etf['score']['sentiment_strength']}/{etf['score']['risk_reward']}） | {etf['signal_grade']} | {quality_label} | {current_position_pct:.1f}% | {etf['position']} |"
         )
+
+    report.extend(policy_adjustment_section(etf_list, policy_state))
 
     report.append("\n## 🌡️ 市场环境\n")
     report.append(f"**🕐 扫描时间:** {market['scan_time']}")
@@ -1875,6 +2084,23 @@ def main(force_refresh=False):
 
     try:
         base_scores = load_base_scores()
+        policy_state = load_policy_deltas()
+        if policy_state["ok"]:
+            base_scores, applied_policy = apply_policy_deltas(
+                base_scores, policy_state["deltas"]
+            )
+            if applied_policy:
+                moved = "、".join(
+                    f"{theme}{delta:+d}" for theme, delta in sorted(applied_policy.items())
+                )
+                print(f"🏛️ 政策事件已计入 base 分（{policy_state['as_of']}）：{moved}")
+            else:
+                print(f"🏛️ 政策事件无生效调整（{policy_state['as_of']}）")
+        else:
+            applied_policy = {}
+            print(f"⚠️ 政策事件未计入：{policy_state['reason']}，本次按纯手工 base 分计算")
+        policy_state["applied"] = applied_policy
+
         holdings_config = load_holdings()
         cash_available = holdings_config.get("cash_available", 0)
         holding_symbols = {
@@ -1913,6 +2139,7 @@ def main(force_refresh=False):
             market["realtime"],
             base_scores,
             index_change,
+            applied_policy,
         )
         decision = build_authoritative_decision(
             etf_list, holdings_data, total_value, cash_available, unpriced_holdings
@@ -1926,6 +2153,7 @@ def main(force_refresh=False):
             total_value,
             cash_available,
             decision,
+            policy_state,
         )
 
         with open(DECISION_FILE, "w", encoding="utf-8") as f:

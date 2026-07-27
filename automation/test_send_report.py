@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 import send_report
+from versioning import METHODOLOGY_VERSION
 
 
 class SendReportTests(unittest.TestCase):
@@ -56,7 +57,7 @@ class SendReportTests(unittest.TestCase):
             "2026-07-09",
             self.dashboard(),
         )
-        self.assertIn("v3.1", payload["title"])
+        self.assertIn(METHODOLOGY_VERSION, payload["title"])
         self.assertNotIn("Gemini", payload["title"])
         self.assertIn("OP-01 BUY sh588800", payload["body"])
         self.assertIn("8,200份（82手）", payload["body"])
@@ -172,7 +173,10 @@ class SendReportTests(unittest.TestCase):
         payload = send_report.build_payload(
             "扫描报告正文", "2026-07-10", dashboard_data=dashboard
         )
-        self.assertEqual(payload["title"], "🔴 数据降级 X-Plan v3.1 波段扫描 2026-07-10")
+        self.assertEqual(
+            payload["title"],
+            f"🔴 数据降级 X-Plan {METHODOLOGY_VERSION} 波段扫描 2026-07-10",
+        )
 
     def test_bark_title_has_three_distinct_states(self):
         today = "2026-07-10"

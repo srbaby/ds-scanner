@@ -248,7 +248,10 @@ def build_policy_watchlist(base_rows: List[Dict], shadow_rows: List[Dict], holdi
     return {
         "generated_at": common.now_str(),
         "updated_frequency": "随每日扫描工作流更新；点击页面顶部 logo 可刷新页面",
-        "mode": "policy_event_shadow_watch_only",
+        # 2026-07-27 起政策 delta 已是扫描器四维评分的正式输入（见 ds_scanner
+        # .load_policy_deltas），不再是旁观影子；这里的 base/shadow 对照因此变成
+        # "不含政策 vs 含政策"的贡献分解，用来解释政策具体改了哪些标的的分。
+        "mode": "policy_in_production_with_breakdown",
         "summary": {
             "holdings_risk_count": len(holdings_risk),
             "near_trigger_count": len(near_triggers),
@@ -296,7 +299,7 @@ def run_compare() -> Dict:
     watchlist = build_policy_watchlist(base_rows, shadow_rows, holdings_data, delta_report, shadow_decision, impact)
     report = {
         "generated_at": common.now_str(),
-        "mode": "policy_event_shadow_no_write_to_production",
+        "mode": "policy_contribution_breakdown",
         "delta_as_of": delta_report.get("as_of"),
         "impact": impact,
         "watchlist": watchlist,
@@ -320,7 +323,7 @@ def render_report(report: Dict) -> None:
         "# Policy Event Shadow 决策影响报告",
         "",
         f"- 生成时间：{report['generated_at']}",
-        "- 模式：政策/新闻事件旁路，不写正式配置，不改主扫描器。",
+        "- 模式：政策事件已计入扫描器四维评分；本报告是"不含政策 vs 含政策"的贡献分解，不回写 etf_base_config.json。",
         f"- delta 日期：{report.get('delta_as_of')}",
         "",
         "## 激进度",

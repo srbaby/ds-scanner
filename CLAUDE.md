@@ -10,6 +10,7 @@ X-DeepSeek 波段验证系统，基于"价值波段 Value-Swing"方法论，每�
 
 ## 🤖 AI操作引导（新会话先读这段）
 
+- **判断"这段代码/这个数字是不是有意设计"，先读 [docs/01-业务意图.md](docs/01-业务意图.md)。** 它讲的是"为什么这么设计、每个数字回答什么问题、哪些看着像 bug 其实是刻意的"，不复述规则。规则永远看 `X-Plan.md`。**发现文档与代码冲突时，默认代码对、文档漏——先问，别按文档去"修正"代码。**
 - **影子系统边界**：不与主体系 0号/1号 的 PE 体系、铁律、持仓混同；本系统持仓/信号不写入主体系文档。
 - **方法论 canonical = 本目录 `X-Plan.md`**（完整版，含附录A扫描器policy分实现）。开仓/止损止盈/仓位/熔断等一切交易规则只看该文件，本文件不保留任何规则摘要，见下"交易规则速查索引"；`automation/ai_review.py` 运行时直接读取该文件全文作为system prompt，不在代码里重复抄写规则。
 - **系统已全部线上运行**（GitHub Actions + Gist + Cloudflare Worker），本地不再跑扫描。本目录是落后的镜像副本，`data/etf_pool.json` / `data/holdings.json` / `dashboard.json` 均为历史快照，**不可据此判断当前持仓或分数**；实时状态只在 Gist（见下"Gist 数据源"），可用已登录的 `gh` CLI（`gh api gists/<id>`）直接读，必要时也可直接 PATCH 写回，不必假设"只能离线分析"。
@@ -25,6 +26,14 @@ X-DeepSeek 波段验证系统，基于"价值波段 Value-Swing"方法论，每�
 3. **往 HTML 属性里塞 `JSON.stringify(...)` 时必须用 `escapeAttr`，不能用 `escapeHtml`。** `escapeHtml` 只转义 `& < >`，不转义双引号；`JSON.stringify` 全是双引号，用 `escapeHtml` 会在属性值里被提前截断，`JSON.parse` 静默炸掉、`catch` 成 `{}`。2026-07-19 发现 `js/app.js` 里 `data-reason="${escapeHtml(JSON.stringify(...))}"` 就是这样：下拉框选项看着完全正常（因为可见文字是单独转义的），但背后存的理由数据全烂了，导致所有登记不管有没有匹配上扫描器建议，最后都被兜底成 `rule_code: MANUAL_BACKFILL`——这个 bug 从功能上线起就一直存在，2026-07-10/07-13/07-14 三笔交易的"人工补录"标签都是被它污染的，已用 `CORRECT_REASON` 更正事件在 Gist 里改回来了（见下）。改任何 `data-*="${...}"` / `title="${...}"` 前，先确认塞进去的字符串里会不会有引号。
 4. **改前端加载方式/接口形状，必须同步改 `js/test_app.js` / `js/test_api.js`，否则每日扫描会整个挂掉。** 这两个测试是 `scan.yml` 的**第一步**（`npm run test:frontend`），它一红，`ds_scanner.py` 根本跑不到，当天没 report、没 Bark、不写 Gist——但失败只体现在 Actions 历史里，不会主动通知任何人。2026-07-19 那次改回普通 script 后忘了改测试，连挂 3 次才被发现。两个测试现在都用 `vm` 把三个脚本按 `index.html` 的顺序丢进同一 context 加载（复刻浏览器共享全局作用域的行为），不走 ESM `import`——**这些文件没有任何 `export`，用 `import` 必然 `SyntaxError`**。另注意两点：① `test_app.js` 里那条 `type="module"` 的 guard 正则必须限定在 `<script` 标签内，因为 `index.html` 里解释"为什么不用 module"的注释本身就含这个字面量，全文搜会自己命中自己；② `vm` 是独立 realm，跨 realm 的对象/数组原型不同，结构比较要用宽松 `deepEqual`，`deepStrictEqual` 会误报。
 
+### ⚠️ 已知坑（改行情/政策数据链路前必读）
+
+这两条的共同教训：**"静默降级成看起来正常的值"比直接报错危险得多**，改数据链路时优先让异常可见，不要给一个"合理"的默认值。
+
+1. **行情历史不复权，份额折算会污染 MA20，且 T-1 收盘校验查不出来。** `ak.fund_etf_hist_sina` 没有 adjust 参数，份额折算日收盘价会单日跳变几十个百分点；只要断层落进 MA20 窗口，MA20 就被永久拉偏。原本的 `close_gap_pct` 只比对最后一根 K 线与实时行情，**看不到窗口内部的断层**，而唯一的兜底是 `abs(MA20偏离) > 30` 这个拍脑袋阈值。2026-07-27 半导体ETF 偏离 -29.64% 差 0.36 个百分点漏网被判"有效"（同一现象的通信ETF -31.94% 被拦下），技术分被压到 4/25，且"现价>MA20"这条开仓硬条件永远不可能满足——一只政策分满分 30/30 的 S 级标的被静默除名。现由 `repair_price_discontinuity()` 前复权修正（单日跳变 >25% 即判定折算，A股ETF涨跌停上限20%，真实行情不可能到这个量级），价格与成交量反向缩放，结果记进 `data_quality.adjustments`（**不是 `issues`**——进 issues 会把标的直接判死）。
+2. **政策研判必须跑在扫描器之前，否则等于没接。** `policy_research` 产出的主题 delta 是四维评分的输入（`ds_scanner.load_policy_deltas()` 读 `snapshots/last_delta.json`）。2026-07-27 之前 `scan.yml` 里政策步骤排在 `ds_scanner.py` **之后**，`ds_scanner.py` 里也没有任何一处引用政策数据——`score_policy_delta.py` 老老实实算出的 `effective_base` 没有任何人读，政策对每日操作建议**零影响**，只在看板上当摆设。改 workflow 顺序时注意别改回去。三条命名链必须严格同名才不会静默失效：`theme_keywords.json` 的主题名 → `etf_base_config.json` 的板块名 → `etf_pool.json` 的 `category`（当前 22/22 完全对齐，加新主题或新板块时要三处一起加）。
+3. **政策事件的 `published_at` 必须来自源站，不能兜底成"今天"。** 采集端曾把 `published_at` 写死 `None`，抽取端再兜底成 `datetime.now()`；叠加 Actions 里 `data/policy_research/events/` 每次都是全新目录（既不提交也不从 Gist 恢复），等于每天把同一条事件重新标成"今天发布"——`age_days` 恒为 0、衰减权重恒为 1.0，`score_policy_delta.py` 里整套半衰期/过期逻辑全是死代码。2026-07-27 发现证券ETF那条"账户管理功能优化试点"从功能上线起就一直挂在满权重不动，`expires_at` 每天顺延（当天值 2026-09-25 = 当天 +60 天，正是这个 bug 的指纹）。现在采集端从列表页/URL 解析真实日期，取不到就留 `None` 并标记 `published_at_estimated`，该标记会把衰减权重压到最高 0.5，且透出到看板事件卡片上。**注意事件目录仍是一次性的**：真实日期解析失败的源站，事件依然不会随时间过期，要根治得把事件台账落到 Gist。
+
 ---
 
 ## 架构
@@ -35,7 +44,11 @@ Cloudflare Worker（cron: 周一至五 北京14:49）
     │ 备用：浏览器访问 Worker URL 带 ?key= 手动触发
     ▼
 GitHub Actions（.github/workflows/scan.yml）
-    │ 运行 automation/ds_scanner.py
+    │ 先跑 automation/policy_research/run_policy_research.py
+    │   └─ 抓政务源→抽事件→按发布日期衰减→主题delta(±2)→snapshots/last_delta.json
+    │      ⚠️ 必须跑在扫描器之前，否则政策影响不了当天建议（2026-07-27 前就是如此）
+    │ 再运行 automation/ds_scanner.py
+    ├─ 读 last_delta.json → 政策delta叠加到base分（进四维政策催化位，见X-Plan模块11）
     ├─ 读 GitHub Gist → etf_pool.json（上次policy分）
     ├─ 读 GitHub Gist → holdings.json（当前持仓）
     ├─ 拉取新浪实时行情 + AKShare历史K线
@@ -244,5 +257,5 @@ python3 automation/ds_scanner.py --refresh-policy
 
 | 版本                    | 日期       | 核心变更                                                     |
 | ----------------------- | ---------- | ------------------------------------------------------------ |
+| **v3.2 政策入评分 + 两处静默降级修复** | 2026-07-27 | **① 政策事件正式成为四维评分输入（方法论升 v3.2）**：此前 `policy_research` 在 `scan.yml` 里排在扫描器之后、`ds_scanner.py` 也从不读它，政策对操作建议零影响、纯看板摆设。现调整 workflow 顺序（政策先跑），`ds_scanner.load_policy_deltas()` 读 `last_delta.json` 把主题 delta（±2）叠加到 base 分，报告新增「政策事件调整」段落显示动了谁。边界见 X-Plan 模块11。② MA20 份额折算断层修正（半导体ETF -29.64% 差 0.36 个百分点绕过 `abs>30` 阈值被判"有效"，政策满分标的被静默除名）。③ 政策事件 `published_at` 不再兜底成当天（衰减机制此前是死代码）。三项均补回归测试，详见上"已知坑（改行情/政策数据链路前必读）" |
 | master-scheduler 补静默日志 | 2026-07-27 | 07-27 中午12:00那次 scan 漏触发（GitHub Actions 与 Gist 均无对应记录），排查发现 `master-scheduler`（独立仓库，见下"排班归中控管"）的 `scheduled()` 从不打日志，即使漏调用也无法事后回溯；14:49 现场蹲守确认链路本身健康（`wrangler tail` 抓到 `dispatch -> 204 OK`）。修复：仅在实际命中 5 个排班点时 `console.log` 结果（不刷屏 idle tick），并把 `wrangler.toml` 里占位的 `compatibility_date` 换成经 Cloudflare API 核对过的线上真实值 `2026-06-24`。改动在 `Master-Scheduler` 仓库，已部署 |
-| 前端测试修复（扫描恢复） | 2026-07-20 | 07-19 改回普通 script 后未同步改前端测试，`scan.yml` 第一步回归测试必挂，扫描自 07-19 起连续失败 3 次（含 07-20 午间）。修复：`test_app.js` 把"断言必须是 module"反转为"出现 module 即失败"的 guard；两个测试改用 `vm` 共享 context 按序加载三个脚本，不再走 ESM `import`；结构比较改宽松 `deepEqual` 避开跨 realm 原型误报。详见上"已知坑"第4条 |

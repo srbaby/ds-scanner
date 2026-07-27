@@ -6,6 +6,7 @@
 
 | 版本 | 日期 | 核心变更 |
 |---|---|---|
+| **前端测试修复（扫描恢复）** | 2026-07-20 | 07-19 改回普通 script 后未同步改前端测试，`scan.yml` 第一步回归测试必挂，扫描自 07-19 起连续失败 3 次（含 07-20 午间）。修复：`test_app.js` 把"断言必须是 module"反转为"出现 module 即失败"的 guard；两个测试改用 `vm` 共享 context 按序加载三个脚本，不再走 ESM `import`；结构比较改宽松 `deepEqual` 避开跨 realm 原型误报。详见 CLAUDE.md「已知坑（改前端代码前必读）」第4条 |
 | **file:// 本地测试修复 + 数据修正** | 2026-07-19 | ① `js/api.js`/`js/decision.js` 从 ES module 改回普通 script（修复 07-15 引入的 file:// CORS 登录失败）；② 修复 `data-reason` 属性用 `escapeHtml` 未转义引号导致的 JSON 静默损坏，这是 07-10/07-13/07-14 三笔交易被误标 `MANUAL_BACKFILL` 的真实根因；③ 用 `CORRECT_REASON` 事件在 Gist 里补上这三笔的正确归因；④ 修桌面表格"实仓→目标"列宽不够导致换行/撑高卡片的问题 |
 | **v3.0线上修复** | 2026-07-09 | Bark由超长原始报告改为限长执行摘要+看板跳转，修复 `PayloadTooLarge`；多接收方独立发送。前端严格匹配AI原因，人工补录改显式确认，新增持仓卡加仓入口，交易与更正分流，手机下拉与操作记录位置优化。方法论/Prompt/data schema版本不变。 |
 | **在线量化观察** | 2026-07-07 | 新增 `observe.py` / `observe.yml` / 前端量化观察面板：自动沉淀 `trades.jsonl`、`portfolio_snapshots.jsonl`、`stats.json`、`observer_state.json`；正式对比口径使用 H00300/H00905 全收益指数，宽基增强参考线标注假设；20:30 CF 中控兜底，不增加日常输入。历史回捞已完成（观察起点重建到 2026-05-21）；回捞/探针（`probe`/`rebuild-history`）为一次性工具，已于 2026-07-08 移除，日后仅日常增量。 |

@@ -122,6 +122,13 @@ def _chat(system: str, user: str, max_tokens: int = 4096) -> Dict:
         "stream": False,
         # 分类任务要可复现：同样的输入不该今天判 + 明天判 −
         "temperature": 0,
+        # thinking 默认是 enabled，推理会吃掉 max_tokens 且结果落在 reasoning_content，
+        # content 反而空——2026-07-29 首次上线就栽在这（"第一趟失败: 返回内容为空"）。
+        # 归类不需要思维链，关掉它更快更省也更稳定。
+        "thinking": {"type": "disabled"},
+        # 官方建议用 JSON 模式约束输出；prompt 里必须出现 "json" 字样并给出样例，
+        # 两个 system prompt 都满足
+        "response_format": {"type": "json_object"},
     }
     retryable = {429, 500, 502, 503, 504}
     attempts = max(1, DEEPSEEK_RETRIES + 1)
@@ -142,12 +149,27 @@ def _chat(system: str, user: str, max_tokens: int = 4096) -> Dict:
             return {"ok": False, "text": "", "error": last_error}
         if r.status_code == 200:
             try:
-                choices = r.json().get("choices") or []
-                text = (choices[0].get("message", {}).get("content") or "").strip() if choices else ""
+                data = r.json()
+                choices = data.get("choices") or []
+                message = choices[0].get("message", {}) if choices else {}
+                text = (message.get("content") or "").strip()
+                finish = choices[0].get("finish_reason", "?") if choices else "?"
+                reasoning_len = len(message.get("reasoning_content") or "")
+                usage = data.get("usage") or {}
             except Exception as exc:
                 return {"ok": False, "text": "", "error": f"响应解析失败: {str(exc)[:160]}"}
             if not text:
-                return {"ok": False, "text": "", "error": "返回内容为空"}
+                # 空 content 的原因不止一种（推理吃光配额 / 截断 / 官方已知的偶发空返回），
+                # 报错必须带上判据，否则下次还得再猜一轮
+                last_error = (
+                    f"返回内容为空（finish_reason={finish}，reasoning={reasoning_len}字，"
+                    f"completion_tokens={usage.get('completion_tokens', '?')}，"
+                    f"上限={max_tokens}）")
+                # 官方文档明说 JSON 模式偶发返回空 content，值得再试一次
+                if attempt < attempts:
+                    time.sleep(DEEPSEEK_RETRY_SLEEP_SECONDS)
+                    continue
+                return {"ok": False, "text": "", "error": last_error}
             return {"ok": True, "text": text, "error": None}
         last_error = f"HTTP {r.status_code}: {r.text[:200]}"
         if r.status_code in retryable and attempt < attempts:
@@ -213,7 +235,9 @@ def pass1_pick(items: List[Dict], sectors: List[str]) -> Dict:
         "items": [{"id": it["id"], "candidate_sectors": it["candidate_sectors"], "title": it["title"]}
                   for it in items],
     }
-    got = _chat(PASS1_SYSTEM, json.dumps(payload, ensure_ascii=False), max_tokens=2048)
+    # 45 个 id 的 JSON 数组本身很短，但留足余量防截断（官方明确提醒 max_tokens
+    # 给小了 JSON 会中途断掉，断掉的 JSON 解析失败等于整趟白跑）
+    got = _chat(PASS1_SYSTEM, json.dumps(payload, ensure_ascii=False), max_tokens=4096)
     if not got["ok"]:
         return {"ok": False, "read": [], "error": got["error"]}
     parsed = parse_json_object(got["text"])

@@ -382,6 +382,53 @@ class AIClassifyTests(unittest.TestCase):
         self.assertEqual(set(got["results"]), {"a"})      # b越界板块/c中性/zzz非入参 全丢
         self.assertEqual(got["results"]["a"]["strength"], 5)  # 99 夹回 5
 
+    def test_request_disables_thinking_and_forces_json(self):
+        """2026-07-29 首次上线就栽在这：thinking 默认开启，推理吃光 max_tokens，
+        结果落在 reasoning_content，content 为空 → "第一趟失败: 返回内容为空"。
+        """
+        from policy_research import ai_classify
+        from unittest.mock import patch, MagicMock
+        sent = {}
+
+        def fake_post(url, headers=None, json=None, proxies=None, timeout=None):
+            sent.update(json)
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"choices": [
+                {"message": {"content": '{"read":[]}'}, "finish_reason": "stop"}]}
+            return resp
+
+        with patch.object(ai_classify, "DEEPSEEK_API_KEY", "k"), \
+             patch.object(ai_classify.requests, "post", fake_post):
+            got = ai_classify._chat("含 JSON 样例的系统提示", "{}", max_tokens=4096)
+        self.assertTrue(got["ok"])
+        self.assertEqual(sent["thinking"], {"type": "disabled"})
+        self.assertEqual(sent["response_format"], {"type": "json_object"})
+        self.assertEqual(sent["temperature"], 0)
+
+    def test_empty_content_error_carries_diagnosis(self):
+        """空返回的报错必须带 finish_reason / reasoning 长度，否则下次还得再猜一轮。"""
+        from policy_research import ai_classify
+        from unittest.mock import patch, MagicMock
+
+        def fake_post(url, headers=None, json=None, proxies=None, timeout=None):
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {
+                "choices": [{"message": {"content": "", "reasoning_content": "想了很久"},
+                             "finish_reason": "length"}],
+                "usage": {"completion_tokens": 2048}}
+            return resp
+
+        with patch.object(ai_classify, "DEEPSEEK_API_KEY", "k"), \
+             patch.object(ai_classify, "DEEPSEEK_RETRIES", 0), \
+             patch.object(ai_classify.requests, "post", fake_post):
+            got = ai_classify._chat("sys", "{}", max_tokens=2048)
+        self.assertFalse(got["ok"])
+        self.assertIn("finish_reason=length", got["error"])
+        self.assertIn("reasoning=4字", got["error"])
+        self.assertIn("completion_tokens=2048", got["error"])
+
     def test_parse_json_survives_code_fence_and_chatter(self):
         from policy_research import ai_classify
         self.assertEqual(

@@ -40,6 +40,10 @@ jobs:
 
       - name: 运行回归测试（门禁：红了后面全不跑）
         run: |
+          # 语法体检必须排在单测之前：单测只覆盖被它 import 到的模块，
+          # 没被任何测试导入的文件（如 compare_policy_decision.py）语法错了
+          # 单测照样全绿——2026-07-29 政策链路静默停摆 2 天就是这么来的。
+          python -m compileall -q automation/
           npm run test:frontend
           PYTHONPATH=automation python -m unittest \
             automation/test_ds_scanner.py \

@@ -178,6 +178,56 @@ class SendReportTests(unittest.TestCase):
             f"🔴 数据降级 X-Plan {METHODOLOGY_VERSION} 波段扫描 2026-07-10",
         )
 
+    def test_bark_body_flags_policy_not_applied(self):
+        """政策步骤是 continue-on-error，Actions 全绿；Bark 是唯一能吼出来的地方。
+
+        2026-07-27~29 政策链路停摆 2 天没人发现，就是因为这行不存在。
+        """
+        dashboard = self.dashboard()
+        dashboard["decision"]["policy"] = {
+            "ok": False,
+            "as_of": None,
+            "reason": "政策数据文件缺失",
+            "applied": {},
+        }
+        body = send_report.build_bark_body("扫描报告正文", dashboard)
+        self.assertIn("⚠️ 政策未计入：政策数据文件缺失", body)
+        self.assertIn("纯手工 base 分", body)
+
+    def test_bark_body_confirms_policy_applied(self):
+        """有生效调整时给正向确认，「政策正常」才和「这行忘了加」可区分。"""
+        dashboard = self.dashboard()
+        dashboard["decision"]["policy"] = {
+            "ok": True,
+            "as_of": "2026-07-29",
+            "reason": "",
+            "applied": {"证券": 1, "半导体": -2},
+        }
+        body = send_report.build_bark_body("扫描报告正文", dashboard)
+        self.assertIn("🏛️ 政策已计入 2026-07-29", body)
+        self.assertIn("证券+1", body)
+        self.assertIn("半导体-2", body)
+
+    def test_bark_body_stays_quiet_without_policy_block(self):
+        """崩溃降级路径写的最小 decision.json 没有 policy 键，不能因此炸掉推送。"""
+        dashboard = self.dashboard()
+        self.assertNotIn("policy", dashboard["decision"])
+        body = send_report.build_bark_body("扫描报告正文", dashboard)
+        self.assertNotIn("政策未计入", body)
+        self.assertNotIn("政策已计入", body)
+
+    def test_bark_body_stays_quiet_when_policy_ok_but_nothing_moved(self):
+        dashboard = self.dashboard()
+        dashboard["decision"]["policy"] = {
+            "ok": True,
+            "as_of": "2026-07-29",
+            "reason": "",
+            "applied": {},
+        }
+        body = send_report.build_bark_body("扫描报告正文", dashboard)
+        self.assertNotIn("政策已计入", body)
+        self.assertNotIn("政策未计入", body)
+
     def test_bark_title_has_three_distinct_states(self):
         today = "2026-07-10"
         ok_title = send_report.build_payload(

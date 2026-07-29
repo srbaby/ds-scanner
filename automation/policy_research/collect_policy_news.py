@@ -152,10 +152,12 @@ def collect_all() -> Dict:
     seen = existing_ids(output_path)
     collected = []
     errors = []
+    source_total = 0
 
     for source in config.get("sources") or []:
         if not source.get("enabled", True):
             continue
+        source_total += 1
         try:
             rows = collect_source(source, keywords, timeout)[:max_items]
             fresh = [row for row in rows if row["raw_id"] not in seen]
@@ -168,8 +170,12 @@ def collect_all() -> Dict:
     snapshot = {
         "generated_at": common.now_str(),
         "raw_path": str(output_path.relative_to(common.ROOT)),
+        # source_total 必须落盘：只记 error_count 无法区分"3 个源挂了"和"总共就 3 个源全挂了"，
+        # 而后者是全线故障。下游靠这两个数判断政策数据能不能信。
+        "source_total": source_total,
         "collected_count": written,
         "error_count": len(errors),
+        "all_sources_failed": bool(source_total) and len(errors) >= source_total,
         "errors": errors,
     }
     common.save_json(common.SNAPSHOT_DIR / "last_collect.json", snapshot)
@@ -180,8 +186,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.parse_args()
     result = collect_all()
-    print(f"policy collect: {result['collected_count']} new items, {result['error_count']} source errors")
-    return 0 if result["collected_count"] or result["error_count"] >= 0 else 1
+    print(
+        f"policy collect: {result['collected_count']} new items, "
+        f"{result['error_count']}/{result['source_total']} source errors"
+    )
+    # 只有"全部源都挂了"才算失败。采集 0 条新条目是正常的（周末政务站不发文，
+    # 且 collected_count 统计的是去重后的新增），拿它当故障信号会天天误报。
+    return 1 if result["all_sources_failed"] else 0
 
 
 if __name__ == "__main__":

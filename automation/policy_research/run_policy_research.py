@@ -28,9 +28,16 @@ def main() -> int:
     parser.add_argument("--score-days", type=int, default=90)
     args = parser.parse_args()
 
+    all_sources_failed = False
     if not args.skip_collect:
         collect = collect_all()
-        print(f"collect: {collect['collected_count']} new, {collect['error_count']} errors")
+        all_sources_failed = bool(collect.get("all_sources_failed"))
+        print(
+            f"collect: {collect['collected_count']} new, "
+            f"{collect['error_count']}/{collect['source_total']} errors"
+        )
+        if all_sources_failed:
+            print("⚠️ 政策源全部采集失败，本次 delta 不可信（扫描器会拒用并在 Bark 报警）")
     extract = run_extract(args.days)
     print(f"extract: {extract['new_event_count']} new events")
     score = run_score(args.score_days)
@@ -38,7 +45,10 @@ def main() -> int:
     print(f"score: {active} active theme deltas")
     compare = run_compare()
     print(f"compare: {compare['impact']['operation_changes']} changes, aggression {compare['impact']['aggression_index']:+.2f}")
-    return 0
+    # 这步在 scan.yml 里是 continue-on-error，非零退出不会拦下扫描，也不会让 Actions 变红。
+    # 报警靠的是 Bark（扫描器读 source_health 后判 not ok）；这个退出码是给本地跑
+    # 和将来去掉 continue-on-error 用的，别指望它自己会喊。
+    return 1 if all_sources_failed else 0
 
 
 if __name__ == "__main__":

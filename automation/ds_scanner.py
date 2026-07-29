@@ -291,12 +291,41 @@ def load_policy_deltas(today: date = None) -> Dict:
             "reason": f"政策数据已过期（{as_of_text}，距今{age_days}天）",
         }
 
+    # 全源采集失败时 themes 会是一片空 delta，和"今天没新政策"长得一模一样。
+    # 不在这里拦下来，一次全线故障就会被当成"政策正常、恰好无调整"静默放行。
+    health = report.get("source_health") or {}
+    if health.get("all_sources_failed"):
+        failed = health.get("error_count")
+        total = health.get("source_total")
+        return {
+            "ok": False,
+            "as_of": as_of_text,
+            "deltas": {},
+            "reason": f"政策源全部采集失败（{failed}/{total}）",
+        }
+
     deltas = {}
     for theme, row in (report.get("themes") or {}).items():
         active = int((row or {}).get("active_delta") or 0)
         if active:
             deltas[theme] = active
     return {"ok": True, "as_of": as_of_text, "deltas": deltas, "reason": ""}
+
+
+def policy_decision_block(policy_state: Dict) -> Dict:
+    """政策状态随 decision.json 一起出仓的精简块。
+
+    政策步骤在 scan.yml 里是 continue-on-error，挂了 Actions 依然全绿，
+    report.txt 里那行警告也没人逐字读。Bark 是主通道，而它只读 decision，
+    所以政策状态必须搭这趟车——2026-07-29 政策停摆 2 天无人察觉就是缺这一环。
+    """
+    policy_state = policy_state or {}
+    return {
+        "ok": bool(policy_state.get("ok")),
+        "as_of": policy_state.get("as_of"),
+        "reason": policy_state.get("reason"),
+        "applied": policy_state.get("applied") or {},
+    }
 
 
 def apply_policy_deltas(base_scores: Dict, deltas: Dict):
@@ -2144,6 +2173,7 @@ def main(force_refresh=False):
         decision = build_authoritative_decision(
             etf_list, holdings_data, total_value, cash_available, unpriced_holdings
         )
+        decision["policy"] = policy_decision_block(policy_state)
 
         report = generate_report_v2(
             market,

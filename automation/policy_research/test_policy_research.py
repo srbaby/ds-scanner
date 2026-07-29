@@ -248,6 +248,76 @@ class EstimatedDateDecayTests(unittest.TestCase):
         self.assertEqual(payload["effective_delta"], 0.5)
 
 
+class SourceHealthTests(unittest.TestCase):
+    """全源采集失败必须留下痕迹，否则和"今天没新政策"长得一模一样。"""
+
+    def _snapshot(self, tmpdir, payload):
+        import json
+        from pathlib import Path
+
+        path = Path(tmpdir) / "last_collect.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        return Path(tmpdir)
+
+    def test_all_sources_failed_is_recorded(self):
+        import tempfile
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            snapdir = self._snapshot(
+                tmpdir,
+                {"source_total": 15, "error_count": 15, "collected_count": 0, "all_sources_failed": True},
+            )
+            with patch.object(score.common, "SNAPSHOT_DIR", snapdir):
+                health = score.source_health()
+        self.assertTrue(health["all_sources_failed"])
+        self.assertEqual(health["source_total"], 15)
+
+    def test_zero_new_items_is_not_a_failure(self):
+        """周末政务站不发文，collected_count 天然为 0，不能当故障。"""
+        import tempfile
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            snapdir = self._snapshot(
+                tmpdir,
+                {"source_total": 15, "error_count": 0, "collected_count": 0, "all_sources_failed": False},
+            )
+            with patch.object(score.common, "SNAPSHOT_DIR", snapdir):
+                health = score.source_health()
+        self.assertFalse(health["all_sources_failed"])
+        self.assertTrue(health["collect_ran"])
+
+    def test_missing_collect_snapshot_is_flagged(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(score.common, "SNAPSHOT_DIR", Path(tmpdir)):
+                health = score.source_health()
+        self.assertFalse(health["collect_ran"])
+        self.assertEqual(health["source_total"], 0)
+
+    def test_collect_exit_code_only_trips_on_total_failure(self):
+        from unittest.mock import patch
+
+        def exit_code(snapshot):
+            # main() 会 parse_args()，unittest 下 sys.argv 带着测试名，必须清掉
+            with patch.object(sys, "argv", ["collect_policy_news.py"]), patch.object(
+                collect, "collect_all", return_value=snapshot
+            ):
+                return collect.main()
+
+        self.assertEqual(
+            exit_code({"collected_count": 0, "error_count": 15, "source_total": 15, "all_sources_failed": True}), 1
+        )
+        self.assertEqual(
+            exit_code({"collected_count": 0, "error_count": 2, "source_total": 15, "all_sources_failed": False}), 0
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
 

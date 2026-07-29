@@ -366,6 +366,76 @@ class PolicyDeltaInputTests(unittest.TestCase):
         self.assertFalse(state["ok"])
         self.assertEqual(state["deltas"], {})
 
+    def test_all_sources_failed_is_refused_not_read_as_no_news(self):
+        """全源采集失败时 themes 是一片空 delta，与"今天没新政策"同形，必须拦下。"""
+        import json
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "last_delta.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "as_of": "2026-07-29",
+                        "event_count": 0,
+                        "source_health": {
+                            "source_total": 15,
+                            "error_count": 15,
+                            "all_sources_failed": True,
+                        },
+                        "themes": {"证券": {"active_delta": 0}},
+                    },
+                    f,
+                )
+            with patch.object(ds_scanner, "POLICY_DELTA_FILE", path):
+                state = ds_scanner.load_policy_deltas(today=date(2026, 7, 29))
+        self.assertFalse(state["ok"])
+        self.assertIn("全部采集失败", state["reason"])
+        self.assertIn("15/15", state["reason"])
+
+    def test_zero_events_with_healthy_sources_stays_ok(self):
+        """采集正常但今天确实没有政策事件——这是常态，不该报警。"""
+        import json
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "last_delta.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "as_of": "2026-07-29",
+                        "event_count": 0,
+                        "source_health": {
+                            "source_total": 15,
+                            "error_count": 0,
+                            "all_sources_failed": False,
+                        },
+                        "themes": {"证券": {"active_delta": 0}},
+                    },
+                    f,
+                )
+            with patch.object(ds_scanner, "POLICY_DELTA_FILE", path):
+                state = ds_scanner.load_policy_deltas(today=date(2026, 7, 29))
+        self.assertTrue(state["ok"])
+        self.assertEqual(state["deltas"], {})
+
+    def test_delta_without_source_health_still_loads(self):
+        """向后兼容：上一版 score 写的 last_delta.json 没有 source_health，不能因此判死。"""
+        import json
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "last_delta.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"as_of": "2026-07-29", "themes": {"证券": {"active_delta": 1}}}, f)
+            with patch.object(ds_scanner, "POLICY_DELTA_FILE", path):
+                state = ds_scanner.load_policy_deltas(today=date(2026, 7, 29))
+        self.assertTrue(state["ok"])
+        self.assertEqual(state["deltas"], {"证券": 1})
+
     def test_delta_is_clamped_into_base_range(self):
         adjusted, applied = ds_scanner.apply_policy_deltas(
             {"证券": 8, "半导体": 15, "煤炭": 0, "_meta": "忽略"},
@@ -453,6 +523,24 @@ class PolicyDeltaInputTests(unittest.TestCase):
         )
         self.assertIn("证券 +1", text)
         self.assertIn("8→9", text)
+
+    def test_decision_carries_policy_state_for_bark(self):
+        """decision.json 必须带政策状态：Bark 只读 decision，读不到就等于没报警。"""
+        block = ds_scanner.policy_decision_block(
+            {"ok": True, "as_of": "2026-07-29", "reason": "", "applied": {"证券": 1}}
+        )
+        self.assertTrue(block["ok"])
+        self.assertEqual(block["as_of"], "2026-07-29")
+        self.assertEqual(block["applied"], {"证券": 1})
+
+    def test_decision_policy_block_keeps_failure_reason(self):
+        """走真实的缺文件路径：这正是 2026-07-27~29 停摆 2 天时的状态。"""
+        with patch.object(ds_scanner, "POLICY_DELTA_FILE", "/nonexistent/last_delta.json"):
+            state = ds_scanner.load_policy_deltas(today=date(2026, 7, 29))
+        block = ds_scanner.policy_decision_block(state)
+        self.assertFalse(block["ok"])
+        self.assertIn("缺失", block["reason"])
+        self.assertEqual(block["applied"], {})
 
 
 def split_history(bars=30, break_at=15, pre=1.75, post=1.16, slope=0.005):

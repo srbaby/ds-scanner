@@ -116,6 +116,28 @@ def portfolio_health(dashboard_data):
     return health, data_gap_holdings
 
 
+def policy_status_lines(dashboard_data):
+    """政策事件有没有进今天的评分，一行说清。
+
+    政策步骤在 scan.yml 里是 continue-on-error，挂了 Actions 依然全绿，
+    所以它的可见性只能靠这里。有生效调整时也给一行正向确认——只在失败时
+    说话，等于把静默降级换个地方复现。
+    """
+    dashboard_data = dashboard_data or {}
+    policy = (dashboard_data.get("decision") or {}).get("policy")
+    if not policy:
+        # 崩溃降级路径写的最小 decision.json 不含 policy 键，此时 health 块已在报警
+        return []
+    if not policy.get("ok"):
+        reason = policy.get("reason") or "政策数据不可用"
+        return [f"⚠️ 政策未计入：{reason}（本次为纯手工 base 分）", ""]
+    applied = policy.get("applied") or {}
+    if not applied:
+        return []
+    moved = "、".join(f"{theme}{delta:+d}" for theme, delta in sorted(applied.items()))
+    return [f"🏛️ 政策已计入 {policy.get('as_of')}：{moved}", ""]
+
+
 def build_bark_body(report_text, dashboard_data=None):
     dashboard_data = dashboard_data or {}
     decision = dashboard_data.get("decision") or {}
@@ -135,6 +157,8 @@ def build_bark_body(report_text, dashboard_data=None):
                 f"无行情持仓：{' / '.join(data_gap_holdings)}（请手动核价，勿依赖本清单判断止损）"
             )
         lines.append("")
+
+    lines.extend(policy_status_lines(dashboard_data))
 
     lines.append(f"{version} · {generated_at or '本次扫描'}")
 

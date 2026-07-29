@@ -162,6 +162,26 @@ def monthly_base_suggestions(events: List[Dict], as_of: datetime) -> Dict[str, D
     return suggestions
 
 
+def source_health() -> Dict:
+    """把采集层的健康度带进 delta 报告，供扫描器判断这份数据能不能信。
+
+    零事件本身不是故障（周末没新政策很正常），但"全部源都抓失败"是。
+    两者在 themes 上长得一模一样（都是空 delta），不带上这个块就无法区分——
+    静默降级正是这么发生的。
+    """
+    snapshot = common.load_json(common.SNAPSHOT_DIR / "last_collect.json", {}) or {}
+    total = int(snapshot.get("source_total") or 0)
+    errors = int(snapshot.get("error_count") or 0)
+    return {
+        "source_total": total,
+        "error_count": errors,
+        "collected_count": int(snapshot.get("collected_count") or 0),
+        "all_sources_failed": bool(snapshot.get("all_sources_failed")),
+        # 采集快照缺失说明 collect 阶段压根没跑成，同样不可信
+        "collect_ran": bool(snapshot),
+    }
+
+
 def run_score(days: int = 90, as_of_text: str | None = None) -> Dict:
     as_of = common.parse_date(as_of_text) if as_of_text else datetime.now()
     as_of = as_of or datetime.now()
@@ -185,6 +205,7 @@ def run_score(days: int = 90, as_of_text: str | None = None) -> Dict:
         # ——那个文件是人工维护的真理源，自动化只能在运行时加偏移，不能改它
         "mode": "runtime_delta_no_write_to_etf_base_config",
         "event_count": len(events),
+        "source_health": source_health(),
         "themes": themes,
         "monthly_base_suggestions": monthly_base_suggestions(events, as_of),
     }

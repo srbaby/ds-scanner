@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """政策事件的板块归类与方向判定（AI）。规则出处：`X-Plan.md` 模块11。
 
-为什么是两趟：模型不直接读取链接正文，所以正文必须由本系统代抓。
+为什么是两趟：DeepSeek API 没有联网能力（2026-07-29 查证官方文档，只有 Tool Calls，
+网页版的搜索按钮不通向 API），所以正文必须由本系统代抓。
 
     粗筛   关键词判"是不是政策类"，且只保留 etf_pool 里有对应 ETF 的板块
     第一趟 送 id + 标题 + 板块候选 → AI 回"该读哪些"（每板块≥2条，全局≤45条）
@@ -22,7 +23,6 @@ import re
 import sys
 import time
 from typing import Dict, List, Optional
-from urllib.parse import quote
 
 import requests
 from bs4 import BeautifulSoup
@@ -36,20 +36,12 @@ if __package__ in {None, ""}:
 else:
     from . import common
 
-POLICY_AI_PROVIDER = os.environ.get("POLICY_AI_PROVIDER", "gemini").strip().lower()
-
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 DEEPSEEK_TIMEOUT = int(os.environ.get("DEEPSEEK_TIMEOUT", "90"))
 DEEPSEEK_RETRIES = int(os.environ.get("DEEPSEEK_RETRIES", "1"))
 DEEPSEEK_RETRY_SLEEP_SECONDS = int(os.environ.get("DEEPSEEK_RETRY_SLEEP_SECONDS", "10"))
-
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
-GEMINI_TIMEOUT = int(os.environ.get("GEMINI_TIMEOUT", "90"))
-GEMINI_RETRIES = int(os.environ.get("GEMINI_RETRIES", "1"))
-GEMINI_RETRY_SLEEP_SECONDS = int(os.environ.get("GEMINI_RETRY_SLEEP_SECONDS", "10"))
 
 # 每个板块至少让 AI 读 2 条，否则冷门板块（今天煤炭/港股科技各只有 3 条候选）
 # 按热度排序永远轮不到，AI 覆盖不到它们就等于没接
@@ -68,27 +60,7 @@ DIRECTIONS = {"positive", "negative", "neutral"}
 
 
 def enabled() -> bool:
-    if POLICY_AI_PROVIDER == "gemini":
-        return bool(GEMINI_API_KEY)
-    if POLICY_AI_PROVIDER == "deepseek":
-        return bool(DEEPSEEK_API_KEY)
-    return False
-
-
-def active_model() -> str:
-    if POLICY_AI_PROVIDER == "gemini":
-        return GEMINI_MODEL
-    if POLICY_AI_PROVIDER == "deepseek":
-        return DEEPSEEK_MODEL
-    return ""
-
-
-def disabled_reason() -> str:
-    if POLICY_AI_PROVIDER == "gemini":
-        return "未配置 GEMINI_API_KEY"
-    if POLICY_AI_PROVIDER == "deepseek":
-        return "未配置 DEEPSEEK_API_KEY"
-    return f"不支持的 POLICY_AI_PROVIDER: {POLICY_AI_PROVIDER}"
+    return bool(DEEPSEEK_API_KEY)
 
 
 # --------------------------------------------------------------------------
@@ -134,10 +106,10 @@ def prefilter(raw_rows: List[Dict], map_themes, config: Dict, sectors: List[str]
 
 
 # --------------------------------------------------------------------------
-# AI 调用（Gemini 默认；DeepSeek 仅作可切换备用）
+# DeepSeek 调用
 # --------------------------------------------------------------------------
 
-def _chat_deepseek(system: str, user: str, max_tokens: int = 4096) -> Dict:
+def _chat(system: str, user: str, max_tokens: int = 4096) -> Dict:
     if not DEEPSEEK_API_KEY:
         return {"ok": False, "text": "", "error": "未配置 DEEPSEEK_API_KEY"}
     payload = {
@@ -205,76 +177,6 @@ def _chat_deepseek(system: str, user: str, max_tokens: int = 4096) -> Dict:
             continue
         return {"ok": False, "text": "", "error": last_error}
     return {"ok": False, "text": "", "error": last_error}
-
-
-def _chat_gemini(system: str, user: str, max_tokens: int = 4096) -> Dict:
-    if not GEMINI_API_KEY:
-        return {"ok": False, "text": "", "error": "未配置 GEMINI_API_KEY"}
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{quote(GEMINI_MODEL, safe='')}:generateContent"
-    )
-    payload = {
-        "systemInstruction": {"parts": [{"text": system}]},
-        "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "maxOutputTokens": max_tokens,
-        },
-    }
-    retryable = {429, 500, 502, 503, 504}
-    attempts = max(1, GEMINI_RETRIES + 1)
-    last_error = ""
-    for attempt in range(1, attempts + 1):
-        try:
-            r = requests.post(
-                url,
-                headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
-                json=payload,
-                proxies=PROXIES,
-                timeout=GEMINI_TIMEOUT,
-            )
-        except Exception as exc:
-            last_error = f"请求异常: {str(exc)[:200]}"
-            if attempt < attempts:
-                time.sleep(GEMINI_RETRY_SLEEP_SECONDS)
-                continue
-            return {"ok": False, "text": "", "error": last_error}
-        if r.status_code == 200:
-            try:
-                data = r.json()
-                candidates = data.get("candidates") or []
-                candidate = candidates[0] if candidates else {}
-                parts = ((candidate.get("content") or {}).get("parts") or [])
-                text = "\n".join(
-                    str(part.get("text") or "").strip()
-                    for part in parts
-                    if isinstance(part, dict) and part.get("text")
-                ).strip()
-                finish = candidate.get("finishReason", "?")
-            except Exception as exc:
-                return {"ok": False, "text": "", "error": f"响应解析失败: {str(exc)[:160]}"}
-            if not text:
-                last_error = f"返回内容为空（finish_reason={finish}，上限={max_tokens}）"
-                if attempt < attempts:
-                    time.sleep(GEMINI_RETRY_SLEEP_SECONDS)
-                    continue
-                return {"ok": False, "text": "", "error": last_error}
-            return {"ok": True, "text": text, "error": None}
-        last_error = f"HTTP {r.status_code}: {r.text[:200]}"
-        if r.status_code in retryable and attempt < attempts:
-            time.sleep(GEMINI_RETRY_SLEEP_SECONDS)
-            continue
-        return {"ok": False, "text": "", "error": last_error}
-    return {"ok": False, "text": "", "error": last_error}
-
-
-def _chat(system: str, user: str, max_tokens: int = 4096) -> Dict:
-    if POLICY_AI_PROVIDER == "gemini":
-        return _chat_gemini(system, user, max_tokens)
-    if POLICY_AI_PROVIDER == "deepseek":
-        return _chat_deepseek(system, user, max_tokens)
-    return {"ok": False, "text": "", "error": disabled_reason()}
 
 
 def parse_json_object(text: str) -> Optional[Dict]:
@@ -437,7 +339,7 @@ def classify(raw_rows: List[Dict], map_themes, config: Dict) -> Dict:
     """
     stats = {"prefiltered": 0, "picked": 0, "fetched": 0, "classified": 0}
     if not enabled():
-        return {"ok": False, "reason": disabled_reason(), "verdicts": {}, "stats": stats}
+        return {"ok": False, "reason": "未配置 DEEPSEEK_API_KEY", "verdicts": {}, "stats": stats}
 
     sectors = etf_sectors()
     items = prefilter(raw_rows, map_themes, config, sectors)
@@ -466,4 +368,4 @@ def classify(raw_rows: List[Dict], map_themes, config: Dict) -> Dict:
     if not judged["results"]:
         return {"ok": False, "reason": "第二趟没有任何可用判定", "verdicts": {}, "stats": stats}
     return {"ok": True, "reason": "", "verdicts": judged["results"], "stats": stats,
-            "model": active_model()}
+            "model": DEEPSEEK_MODEL}

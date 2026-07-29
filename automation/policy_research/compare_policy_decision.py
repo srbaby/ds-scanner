@@ -205,6 +205,25 @@ def compact_watch_row(base: Dict, shadow: Dict, active_delta: int, holding: bool
     }
 
 
+def policy_evidence(event: Dict) -> Dict:
+    """一条政策事件的可核对凭据：标题、原文链接、日期、它贡献了多少分。
+
+    链接取证据最强的那个源（sources 已按加入顺序排列，rank 高的先命中）。
+    estimated=True 表示日期来自抓取时间而非源站，看板上要标出来。
+    """
+    sources = event.get("sources") or []
+    primary = sources[0] if sources else {}
+    return {
+        "title": event.get("title") or primary.get("title") or "",
+        "url": primary.get("url") or "",
+        "source": primary.get("source") or "",
+        "published_at": event.get("published_at"),
+        "published_at_estimated": bool(event.get("published_at_estimated")),
+        "direction": event.get("direction"),
+        "effective_delta": event.get("effective_delta"),
+    }
+
+
 def build_policy_watchlist(base_rows: List[Dict], shadow_rows: List[Dict], holdings_data: List[Dict], delta_report: Dict, shadow_decision: Dict, impact: Dict) -> Dict:
     active = {theme: int(row.get("active_delta") or 0) for theme, row in (delta_report.get("themes") or {}).items() if row.get("active_delta")}
     event_map = {theme: (row.get("policy_events") or [])[:2] for theme, row in (delta_report.get("themes") or {}).items()}
@@ -241,8 +260,17 @@ def build_policy_watchlist(base_rows: List[Dict], shadow_rows: List[Dict], holdi
     holdings_risk = sorted(holdings_risk, key=sort_key)[:5]
     near_triggers = sorted(near_triggers, key=sort_key)[:6]
     near_downgrades = sorted(near_downgrades, key=sort_key)[:5]
+    # 每个生效主题都要能穿透查证：加减分的依据标题 + 原文链接 + 日期一并带出，
+    # 否则看板上只有一个"证券 +1"的小徽章，凭什么加这一分无从核对。
+    full_events = {theme: (row.get("policy_events") or []) for theme, row in (delta_report.get("themes") or {}).items()}
     active_policy_deltas = [
-        {"theme": theme, "delta": delta, "event_count": len(event_map.get(theme, [])), "sample_event": (event_map.get(theme) or [{}])[0].get("title", "")}
+        {
+            "theme": theme,
+            "delta": delta,
+            "event_count": len(full_events.get(theme, [])),
+            "sample_event": (full_events.get(theme) or [{}])[0].get("title", ""),
+            "events": [policy_evidence(event) for event in full_events.get(theme, [])],
+        }
         for theme, delta in sorted(active.items(), key=lambda item: (-abs(item[1]), item[0]))
     ]
     return {

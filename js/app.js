@@ -1067,12 +1067,35 @@ function renderPolicyWatch(data) {
   sections.push(policyWatchRows('可能触发操作', triggers, 'trigger'));
   sections.push(policyWatchRows('持仓降级观察', downgrades, 'risk'));
   if (deltas.length) {
-    sections.push('<div class="policy-delta-list">' + deltas.map(row => {
-      const cls = row.delta > 0 ? 'is-pos' : 'is-neg';
-      return `<span class="policy-delta ${cls}">${escapeHtml(row.theme)} ${signedNumber(row.delta)}</span>`;
-    }).join('') + '</div>');
+    sections.push('<div class="policy-delta-list">' + deltas.map(row => policyDeltaEvidence(row)).join('') + '</div>');
   }
   body.innerHTML = sections.join('');
+}
+
+function policyDeltaEvidence(row) {
+  // 每个生效主题都要能穿透查证：展开就是加减分的依据标题 + 原文链接 + 日期。
+  // 只给一个"证券 +1"的徽章，凭什么加这一分无从核对。
+  const cls = row.delta > 0 ? 'is-pos' : 'is-neg';
+  const chip = `<span class="policy-delta ${cls}">${escapeHtml(row.theme)} ${signedNumber(row.delta)}</span>`;
+  const events = row.events || [];
+  if (!events.length) return `<div class="policy-delta-item">${chip}</div>`;
+  const items = events.map(ev => {
+    const date = ev.published_at || '日期未知';
+    const est = ev.published_at_estimated ? '<span class="policy-ev-est" title="日期取自抓取时间，非源站标注">抓取日</span>' : '';
+    const contrib = ev.effective_delta != null ? `<span class="policy-ev-delta">${signedNumber(ev.effective_delta)}</span>` : '';
+    const title = escapeHtml(ev.title || '');
+    const href = safeHttpUrl(ev.url);
+    const link = href
+      ? `<a class="policy-ev-title" href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer">${title}</a>`
+      : `<span class="policy-ev-title">${title}</span>`;
+    return `<li class="policy-ev">${link}
+      <span class="policy-ev-meta">${escapeHtml(ev.source || '')} · ${escapeHtml(date)}${est ? ' ' : ''}${est} ${contrib}</span>
+    </li>`;
+  }).join('');
+  return `<details class="policy-delta-item">
+    <summary>${chip}<span class="policy-delta-count">${events.length}条依据</span></summary>
+    <ul class="policy-ev-list">${items}</ul>
+  </details>`;
 }
 
 function policyWatchRows(title, rows, tone) {
@@ -1187,6 +1210,14 @@ function escapeHtml(s) {
 
 function escapeAttr(s) {
   return escapeHtml(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// 政策事件的链接是从政务网站抓来的外部数据，直接塞进 href 等于让外部内容决定
+// 点击行为。只放行 http/https，javascript:/data: 一律当没有链接处理。
+function safeHttpUrl(value) {
+  const text = String(value || '').trim();
+  if (!/^https?:\/\//i.test(text)) return '';
+  return text;
 }
 
 function renderMarkdown(text) {

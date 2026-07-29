@@ -114,12 +114,18 @@ def extract_events(raw_rows: List[Dict]):
         if strength <= 0:
             continue
         published = common.parse_date(raw.get("published_at"))
+        published_estimated = published is None
+        if published_estimated:
+            # 源站没给发布日期时，用抓取日期顶上（大亨 2026-07-29 决定：商务部这类
+            # 滚动很快的新闻列表，条目在榜时间就是几天，抓取日 ≈ 发布日，宁可近似
+            # 也不要丢掉）。必须标记 estimated，score 会把权重压到 0.5。
+            #
+            # ⚠️ 这个近似只对"滚动列表"成立，对停更的归档页是灾难：条目永远在榜，
+            # 每天被重新标成"今天"，就成了不死的僵尸。2026-07-29 那条 2021-12-03 的
+            # 证监会试点公告就是这么来的（源 URL 指向 2021 年归档页，见 docs/03 2.4.1）。
+            # 换源 URL 是前提，不是可选项。
+            published = common.parse_date(raw.get("collected_at"))
         if published is None:
-            # 没有发布日期就不进评分——绝不兜底成"今天"。
-            # 事件目录在 Actions 里是一次性的，兜底等于每天把它重刷成"今天发布"：
-            # age 恒为 0、永不衰减、expires_at 天天顺延，成了一条不死的僵尸。
-            # 而日期真实的事件会正常衰减退出，于是长期只有僵尸能活在 active_delta 里
-            # ——2026-07-29 查出 3 个生效主题全部由僵尸驱动，就是这么来的。
             skipped_no_date.append({"title": title, "source": raw.get("source"), "url": raw.get("url")})
             continue
         decay = default_decay(raw.get("source_rank", ""), action)
@@ -136,9 +142,8 @@ def extract_events(raw_rows: List[Dict]):
                 "event_id": key,
                 "created_at": common.now_str(),
                 "published_at": published.strftime("%Y-%m-%d"),
-                # 恒为 False：没有真实日期的条目上面已经被排除了。字段保留是为了
-                # score_policy_delta 读到历史 events 文件里的旧行时仍能正确降权。
-                "published_at_estimated": False,
+                # True = 这个日期来自抓取时间而非源站，score 会把衰减权重压到 0.5
+                "published_at_estimated": published_estimated,
                 "title": title,
                 "themes": themes,
                 "direction": direction,

@@ -235,13 +235,22 @@ class EstimatedDateDecayTests(unittest.TestCase):
             "published_at": published_at,
         }
 
-    def test_event_without_publish_date_is_excluded_not_dated_today(self):
-        """核心回归：无发布日期的条目直接排除，绝不兜底成"今天"。
+    def test_event_without_publish_date_falls_back_to_collected_at(self):
+        """源站没给日期时用抓取日期顶上，并标记 estimated（大亨 2026-07-29 决定）。
 
-        原来这里断言的是"兜底成今天并标记 estimated"，等于把半截修复锁成了正确行为。
-        兜底出来的事件 age 恒为 0、永不衰减、expires_at 天天顺延，而日期真实的事件
-        会正常衰减退出——长期只有僵尸能活在 active_delta 里。
+        近似的前提是源站是滚动列表；对停更归档页这么干会造出不死僵尸，
+        所以标记必须留下——score 靠它把权重压到 0.5。
         """
+        raw = self._event(None)
+        raw["collected_at"] = "2026-07-20 09:00:00"
+        events, skipped = extract.extract_events([raw])
+        self.assertEqual(skipped, [])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["published_at"], "2026-07-20")
+        self.assertTrue(events[0]["published_at_estimated"])
+
+    def test_event_without_any_date_at_all_is_excluded(self):
+        """连抓取时间都没有才排除——绝不用"今天"顶替。"""
         events, skipped = extract.extract_events([self._event(None)])
         self.assertEqual(events, [])
         self.assertEqual(len(skipped), 1)

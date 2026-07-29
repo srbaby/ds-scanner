@@ -178,4 +178,49 @@ assert.equal(
   true,
 );
 
+// --- 政策加减分必须可穿透核对：标题 + 原文链接 + 日期 ---
+const evidenceHtml = context.policyDeltaEvidence({
+  theme: '证券',
+  delta: -1,
+  events: [
+    {
+      title: '中国证券监督管理委员会行政处罚决定书',
+      url: 'http://www.csrc.gov.cn/csrc/c101800/c7647255/content.shtml',
+      source: '证监会政策法规',
+      published_at: '2026-06-30',
+      published_at_estimated: false,
+      effective_delta: -1,
+    },
+  ],
+});
+assert.match(evidenceHtml, /证券 -1/);
+assert.match(evidenceHtml, /1条依据/);
+assert.match(evidenceHtml, /中国证券监督管理委员会行政处罚决定书/);
+assert.match(evidenceHtml, /href="http:\/\/www\.csrc\.gov\.cn/);
+assert.match(evidenceHtml, /2026-06-30/);
+assert.match(evidenceHtml, /rel="noopener noreferrer"/);
+
+// 抓取日期要标出来，别让人以为是源站标注的发布日
+const estimatedHtml = context.policyDeltaEvidence({
+  theme: 'AI算力',
+  delta: -2,
+  events: [{ title: '答记者问', url: 'https://www.mofcom.gov.cn/a.html', published_at: '2026-07-29', published_at_estimated: true, effective_delta: -1 }],
+});
+assert.match(estimatedHtml, /抓取日/);
+
+// 政策链接来自抓取的外部页面，非 http(s) 协议不能进 href
+assert.equal(context.safeHttpUrl('javascript:alert(1)'), '');
+assert.equal(context.safeHttpUrl('data:text/html,<script>'), '');
+assert.equal(context.safeHttpUrl('https://www.gov.cn/a.htm'), 'https://www.gov.cn/a.htm');
+const hostileHtml = context.policyDeltaEvidence({
+  theme: '证券',
+  delta: 1,
+  events: [{ title: '恶意链接', url: 'javascript:alert(1)', published_at: '2026-07-29', effective_delta: 1 }],
+});
+assert.doesNotMatch(hostileHtml, /href=/);
+assert.match(hostileHtml, /恶意链接/);
+
+// 没有依据时退回成普通徽章，不能渲染出空的展开框
+assert.doesNotMatch(context.policyDeltaEvidence({ theme: '银行', delta: 1, events: [] }), /<details/);
+
 console.log('app.js parser tests: OK');

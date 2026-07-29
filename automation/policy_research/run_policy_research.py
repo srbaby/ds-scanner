@@ -39,7 +39,10 @@ def main() -> int:
         if all_sources_failed:
             print("⚠️ 政策源全部采集失败，本次 delta 不可信（扫描器会拒用并在 Bark 报警）")
     extract = run_extract(args.days)
-    print(f"extract: {extract['new_event_count']} new events")
+    print(
+        f"extract: {extract['new_event_count']} new events"
+        f"，{extract['skipped_no_date_count']} 条因无发布日期被排除"
+    )
     score = run_score(args.score_days)
     active = sum(1 for row in score["themes"].values() if row.get("active_delta"))
     print(f"score: {active} active theme deltas")

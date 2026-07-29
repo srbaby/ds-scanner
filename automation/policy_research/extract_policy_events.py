@@ -91,9 +91,14 @@ def default_decay(source_rank: str, action: str) -> Dict:
     return {"decay_mode": "news_7d", "expires_in_days": 7, "half_life_days": 3}
 
 
-def extract_events(raw_rows: List[Dict]) -> List[Dict]:
+def extract_events(raw_rows: List[Dict]):
+    """返回 (事件列表, 因无发布日期被排除的条目)。
+
+    排除项必须一并返回：静默丢弃和静默兜底是同一类错误的两面。
+    """
     config = load_theme_config()
     by_key: Dict[str, Dict] = {}
+    skipped_no_date: List[Dict] = []
     for raw in raw_rows:
         title = common.compact_text(raw.get("title", ""), 220)
         if common.contains_any(title, config.get("non_policy_keywords") or []):
@@ -109,12 +114,14 @@ def extract_events(raw_rows: List[Dict]) -> List[Dict]:
         if strength <= 0:
             continue
         published = common.parse_date(raw.get("published_at"))
-        published_estimated = published is None
-        if published_estimated:
-            # 采集端没拿到发布日期时只能以"今天"落账，但必须留下标记：
-            # 事件目录在 Actions 里是一次性的，不标记就会每天被重刷成"今天发布"，
-            # 衰减权重永远是1.0，score_policy_delta 的半衰期/过期形同虚设。
-            published = datetime.now()
+        if published is None:
+            # 没有发布日期就不进评分——绝不兜底成"今天"。
+            # 事件目录在 Actions 里是一次性的，兜底等于每天把它重刷成"今天发布"：
+            # age 恒为 0、永不衰减、expires_at 天天顺延，成了一条不死的僵尸。
+            # 而日期真实的事件会正常衰减退出，于是长期只有僵尸能活在 active_delta 里
+            # ——2026-07-29 查出 3 个生效主题全部由僵尸驱动，就是这么来的。
+            skipped_no_date.append({"title": title, "source": raw.get("source"), "url": raw.get("url")})
+            continue
         decay = default_decay(raw.get("source_rank", ""), action)
         key = common.stable_id(normalize_title(title), ",".join(sorted(themes)), direction, action)
         event = by_key.get(key)
@@ -129,7 +136,9 @@ def extract_events(raw_rows: List[Dict]) -> List[Dict]:
                 "event_id": key,
                 "created_at": common.now_str(),
                 "published_at": published.strftime("%Y-%m-%d"),
-                "published_at_estimated": published_estimated,
+                # 恒为 False：没有真实日期的条目上面已经被排除了。字段保留是为了
+                # score_policy_delta 读到历史 events 文件里的旧行时仍能正确降权。
+                "published_at_estimated": False,
                 "title": title,
                 "themes": themes,
                 "direction": direction,
@@ -147,7 +156,7 @@ def extract_events(raw_rows: List[Dict]) -> List[Dict]:
             event["sources"].append(source_payload)
             event["evidence_strength"] = max(event["evidence_strength"], strength)
             event["confidence"] = "high" if event["evidence_strength"] >= 4 or len(event["sources"]) >= 2 else event["confidence"]
-    return list(by_key.values())
+    return list(by_key.values()), skipped_no_date
 
 
 def existing_ids(path) -> set:
@@ -156,7 +165,7 @@ def existing_ids(path) -> set:
 
 def run_extract(days: int = 7) -> Dict:
     raw_rows = common.read_recent_jsonl(common.RAW_DIR, days)
-    events = extract_events(raw_rows)
+    events, skipped_no_date = extract_events(raw_rows)
     output_path = common.EVENT_DIR / f"{common.month_key()}.jsonl"
     seen = existing_ids(output_path)
     fresh = [row for row in events if row["event_id"] not in seen]
@@ -167,6 +176,9 @@ def run_extract(days: int = 7) -> Dict:
         "raw_count": len(raw_rows),
         "event_count": len(events),
         "new_event_count": written,
+        # 被排除的条目要留痕：数量突然变大 = 某个源改版导致日期解析失效
+        "skipped_no_date_count": len(skipped_no_date),
+        "skipped_no_date": skipped_no_date[:20],
     }
     common.save_json(common.SNAPSHOT_DIR / "last_extract.json", snapshot)
     return snapshot
@@ -177,7 +189,10 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=7)
     args = parser.parse_args()
     result = run_extract(args.days)
-    print(f"policy extract: {result['new_event_count']} new events from {result['raw_count']} raw items")
+    print(
+        f"policy extract: {result['new_event_count']} new events from {result['raw_count']} raw items"
+        f"（{result['skipped_no_date_count']} 条无发布日期被排除）"
+    )
     return 0
 
 

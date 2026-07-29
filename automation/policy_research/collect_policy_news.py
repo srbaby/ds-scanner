@@ -43,7 +43,6 @@ URL_DATE_PATTERNS = (
     re.compile(r"[t_](20\d{2})(\d{2})(\d{2})\D"),
     re.compile(r"/(20\d{2})[-_/](\d{1,2})[-_/](\d{1,2})(?:\D|$)"),
 )
-MAX_PUBLISHED_AGE_DAYS = 1095
 
 
 def date_from_url(url: str):
@@ -84,14 +83,22 @@ def resolve_published_at(anchor, url: str, title: str, today: datetime = None):
     datetime.now()，导致每次跑都把事件重新标成"今天发布"，age 恒为0、衰减权重恒
     为1.0，score_policy_delta 里整套半衰期/过期逻辑成了死代码。2026-07-27 证券ETF
     那条"账户管理功能优化试点"就是这样从上线起一直挂在满权重不动。
+
+    ⚠️ 这里**不能**因为日期太老就丢弃。2026-07-29 查出：那条试点公告页面上白纸黑字
+    写着 2021-12-03，被正确解析出来了，却因为超过当时的 3 年上限而被判为"没有日期"，
+    抽取端再兜底成今天——**护栏反而把 4.6 年前的旧闻变年轻了**。旧日期照收，
+    交给下游的半衰期/过期机制淘汰，那才是它该干的活。
+
+    只拒绝未来日期：那一定是从无关文本里解析错了。解析错成旧日期是安全方向
+    （事件会被判过期而排除），解析错成未来日期则会让它永远不过期。
     """
     today = today or datetime.now()
     for candidate in (date_from_url(url), date_from_neighbourhood(anchor, title)):
         if not candidate:
             continue
-        age_days = (today.date() - candidate.date()).days
-        if 0 <= age_days <= MAX_PUBLISHED_AGE_DAYS:
-            return candidate
+        if (today.date() - candidate.date()).days < 0:
+            continue
+        return candidate
     return None
 
 

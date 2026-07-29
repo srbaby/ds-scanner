@@ -27,7 +27,7 @@ class PolicyResearchTests(unittest.TestCase):
                 "published_at": "2026-07-10",
             }
         ]
-        events = extract.extract_events(rows)
+        events, _ = extract.extract_events(rows)
         self.assertEqual(len(events), 1)
         self.assertIn("AI算力", events[0]["themes"])
         self.assertEqual(events[0]["direction"], "positive")
@@ -44,7 +44,7 @@ class PolicyResearchTests(unittest.TestCase):
                 "published_at": "2026-07-10",
             }
         ]
-        self.assertEqual(extract.extract_events(rows), [])
+        self.assertEqual(extract.extract_events(rows)[0], [])
     def test_s_level_strong_event_maps_to_plus_two(self):
         event = {
             "direction": "positive",
@@ -160,6 +160,22 @@ class PublishDateTests(unittest.TestCase):
             )
         )
 
+    def test_old_date_is_returned_not_discarded_as_unknown(self):
+        """曾有 3 年上限，把解析对的 2021-12-03 判成"没有日期"，下游再兜底成今天。
+
+        护栏于是让 4.6 年前的旧闻变年轻了。旧日期照收，交给过期机制淘汰。
+        """
+        soup = BeautifulSoup(
+            '<li><a href="/a.shtml">试点公告</a><span>2021-12-03</span></li>',
+            "html.parser",
+        )
+        anchor = soup.find("a")
+        got = collect.resolve_published_at(
+            anchor, "/a.shtml", "试点公告", today=datetime(2026, 7, 29)
+        )
+        self.assertIsNotNone(got)
+        self.assertEqual(got.strftime("%Y-%m-%d"), "2021-12-03")
+
     def test_future_dates_are_rejected(self):
         soup = BeautifulSoup(
             '<li><a href="/a.shtml">试点公告</a><span>2027-01-01</span></li>',
@@ -184,14 +200,36 @@ class EstimatedDateDecayTests(unittest.TestCase):
             "published_at": published_at,
         }
 
-    def test_event_without_publish_date_is_marked_estimated(self):
-        events = extract.extract_events([self._event(None)])
-        self.assertEqual(len(events), 1)
-        self.assertTrue(events[0]["published_at_estimated"])
+    def test_event_without_publish_date_is_excluded_not_dated_today(self):
+        """核心回归：无发布日期的条目直接排除，绝不兜底成"今天"。
 
-    def test_event_with_publish_date_is_not_marked_estimated(self):
-        events = extract.extract_events([self._event("2026-07-10")])
+        原来这里断言的是"兜底成今天并标记 estimated"，等于把半截修复锁成了正确行为。
+        兜底出来的事件 age 恒为 0、永不衰减、expires_at 天天顺延，而日期真实的事件
+        会正常衰减退出——长期只有僵尸能活在 active_delta 里。
+        """
+        events, skipped = extract.extract_events([self._event(None)])
+        self.assertEqual(events, [])
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["title"], TITLE)
+
+    def test_event_with_publish_date_is_kept(self):
+        events, skipped = extract.extract_events([self._event("2026-07-10")])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["published_at"], "2026-07-10")
         self.assertFalse(events[0]["published_at_estimated"])
+        self.assertEqual(skipped, [])
+
+    def test_old_but_real_date_is_kept_and_left_to_expire(self):
+        """2026-07-29 的病根：真实旧日期被年龄护栏当脏数据丢弃，再被兜底成今天。
+
+        4.6 年前的证监会试点公告因此天天以"今天发布"重生。旧日期必须照收，
+        由半衰期/过期机制淘汰——那才是它该干的活。
+        """
+        events, skipped = extract.extract_events([self._event("2021-12-03")])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["published_at"], "2021-12-03")
+        self.assertLess(events[0]["expires_at"], "2022-06-01")
+        self.assertEqual(skipped, [])
 
     def test_estimated_date_never_gets_full_weight(self):
         """核心回归：日期存疑的事件不能天天满权重挂着。"""

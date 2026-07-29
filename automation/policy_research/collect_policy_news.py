@@ -201,6 +201,7 @@ def collect_all() -> Dict:
     collected = []
     errors = []
     source_total = 0
+    per_source = {}
 
     for source in config.get("sources") or []:
         if not source.get("enabled", True):
@@ -208,10 +209,15 @@ def collect_all() -> Dict:
         source_total += 1
         try:
             rows = collect_source(source, keywords, timeout)[:max_items]
+            # 抓到几条（去重前）才是这个源的真实产出。只看 error_count 看不出
+            # "HTTP 200 但一条都没有"——JS 跳转壳页、域名白名单漏配子域、页面改版
+            # 都是这个形态。2026-07-29 一查，5 个 rank-S 源里 4 个是哑的。
+            per_source[source.get("id")] = {"name": source.get("name"), "rank": source.get("rank"), "matched": len(rows)}
             fresh = [row for row in rows if row["raw_id"] not in seen]
             seen.update(row["raw_id"] for row in fresh)
             collected.extend(fresh)
         except Exception as exc:
+            per_source[source.get("id")] = {"name": source.get("name"), "rank": source.get("rank"), "matched": None}
             errors.append({"source_id": source.get("id"), "source": source.get("name"), "error": str(exc)[:300]})
 
     written = common.append_jsonl(output_path, collected)
@@ -224,6 +230,12 @@ def collect_all() -> Dict:
         "collected_count": written,
         "error_count": len(errors),
         "all_sources_failed": bool(source_total) and len(errors) >= source_total,
+        "per_source": per_source,
+        # HTTP 通了但一条都没抓到的源。不算故障（某个源今天没相关新闻很正常），
+        # 但必须留痕：长期挂零就是这个源已经废了，而 error_count 永远是 0。
+        "zero_yield_sources": sorted(
+            row["name"] for row in per_source.values() if row.get("matched") == 0
+        ),
         "errors": errors,
     }
     common.save_json(common.SNAPSHOT_DIR / "last_collect.json", snapshot)

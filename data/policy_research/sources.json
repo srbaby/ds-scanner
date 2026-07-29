@@ -11,7 +11,7 @@
       "name": "中国政府网政策库",
       "rank": "S",
       "region": "CN",
-      "url": "https://www.gov.cn/zhengce/zhengcewenjianku/index.htm",
+      "url": "https://www.gov.cn/zhengce/xxgk/",
       "allowed_domains": [
         "www.gov.cn"
       ],
@@ -22,7 +22,7 @@
       "name": "国家发改委政策发布",
       "rank": "S",
       "region": "CN",
-      "url": "https://www.ndrc.gov.cn/xxgk/zcfb/",
+      "url": "https://www.ndrc.gov.cn/xxgk/zcfb/fzggwl/",
       "allowed_domains": [
         "www.ndrc.gov.cn"
       ],
@@ -46,7 +46,7 @@
       "region": "CN",
       "url": "https://www.mof.gov.cn/zhengwuxinxi/zhengcefabu/",
       "allowed_domains": [
-        "www.mof.gov.cn"
+        "mof.gov.cn"
       ],
       "enabled": true
     },
@@ -154,7 +154,7 @@
       "name": "新华社财经",
       "rank": "B",
       "region": "CN",
-      "url": "http://www.news.cn/fortune/",
+      "url": "http://www.news.cn/fortune/index.htm",
       "allowed_domains": [
         "www.news.cn"
       ],

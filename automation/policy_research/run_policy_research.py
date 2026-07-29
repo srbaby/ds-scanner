@@ -38,6 +38,9 @@ def main() -> int:
         )
         if all_sources_failed:
             print("⚠️ 政策源全部采集失败，本次 delta 不可信（扫描器会拒用并在 Bark 报警）")
+        zero = collect.get("zero_yield_sources") or []
+        if zero:
+            print(f"ℹ️ 本次 0 产出的源（{len(zero)}/{collect['source_total']}）：{'、'.join(zero)}")
     extract = run_extract(args.days)
     print(
         f"extract: {extract['new_event_count']} new events"

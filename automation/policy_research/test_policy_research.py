@@ -382,6 +382,47 @@ class SourceHealthTests(unittest.TestCase):
         self.assertFalse(health["collect_ran"])
         self.assertEqual(health["source_total"], 0)
 
+    def test_zero_yield_source_is_recorded(self):
+        """HTTP 200 但一条都没抓到的源必须留痕：error_count 永远看不出这种废源。
+
+        2026-07-29 一查，5 个 rank-S 源里 4 个是哑的（JS 跳转壳页、子域名没进白名单），
+        全部 HTTP 200、error_count 为 0，从健康度上完全看不出来。
+        """
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        sources = {
+            "sources": [
+                {"id": "dead", "name": "工信部政策文件", "rank": "S", "url": "https://x/", "enabled": True},
+                {"id": "live", "name": "证监会政策法规", "rank": "S", "url": "https://y/", "enabled": True},
+                {"id": "boom", "name": "超时的源", "rank": "A", "url": "https://z/", "enabled": True},
+            ]
+        }
+
+        def fake_collect(source, keywords, timeout):
+            if source["id"] == "boom":
+                raise RuntimeError("connect timeout")
+            if source["id"] == "dead":
+                return []
+            return [{"raw_id": "r1", "title": "t"}]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(collect.common, "SOURCES_FILE", Path(tmpdir) / "sources.json"), \
+                 patch.object(collect.common, "RAW_DIR", Path(tmpdir)), \
+                 patch.object(collect.common, "SNAPSHOT_DIR", Path(tmpdir)), \
+                 patch.object(collect.common, "load_json", lambda path, default=None: sources if str(path).endswith("sources.json") else default), \
+                 patch.object(collect.common, "ROOT", Path(tmpdir)), \
+                 patch.object(collect, "load_keywords", lambda: {}), \
+                 patch.object(collect, "collect_source", fake_collect):
+                snapshot = collect.collect_all()
+
+        # 抓 0 条和抓取失败是两回事：后者已经进 errors，不该在这里重复报
+        self.assertEqual(snapshot["zero_yield_sources"], ["工信部政策文件"])
+        self.assertEqual(snapshot["error_count"], 1)
+        self.assertEqual(snapshot["source_total"], 3)
+        self.assertIsNone(snapshot["per_source"]["boom"]["matched"])
+
     def test_collect_exit_code_only_trips_on_total_failure(self):
         from unittest.mock import patch
 

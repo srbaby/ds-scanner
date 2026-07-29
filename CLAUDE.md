@@ -113,11 +113,14 @@ X-Plan/
 ├── automation/
 │   ├── ds_scanner.py          # 主扫描：评分 → 权威决策 → 报告
 │   ├── policy_research/       # 政策事件流水线（collect→extract→score→compare）
+│   │   ├── ai_classify.py         # 事件归类判 ±（两趟调 DeepSeek），失败退回关键词
+│   │   └── check_etf_coverage.py  # 核对每个 ETF 板块 ≥2 个供数的源
 │   ├── generate_dashboard.py  # 写 Gist dashboard.json
 │   ├── send_report.py         # Bark 推送
 │   ├── observe.py             # 夜间观察器：台账/快照/统计
 │   └── test_*.py              # 回归测试（scan.yml 门禁）
 ├── data/etf_base_config.json  # 板块政策基础分，唯一需手工维护的数据
+├── data/policy_research/sources.json  # 31 个政务/行业源，按 ETF 板块配齐
 ├── index.html · js/ · css/    # 前端（GH Pages，stock.bailuzun.com）
 ├── workers/ds-scan-trigger/   # Cloudflare Worker 触发器源码
 └── .github/workflows/scan.yml
@@ -138,5 +141,5 @@ X-Plan/
 
 | 版本 | 日期 | 核心变更 |
 | --- | --- | --- |
-| **文档体系重构（Fund 五篇制）** | 2026-07-27 | CLAUDE.md 由 270 行的全文说明收敛为索引，规范拆为 `docs/01`–`05`；删掉已烂的「交易规则速查索引」（10 概念烂 9 个）；毕业/熔断阈值补进 `X-Plan.md` 模块10（此前只是 `observe.py` 里的魔法数字）；清理架构图/每日流程/环境变量里失实的「Gemini 每日自动分析」描述（实际 `AI_PROVIDER=none`）。参照 `fund-monitor` 的单一出处原则 |
-| **v3.2 政策入评分 + 两处静默降级修复** | 2026-07-27 | ① 政策事件正式成为四维评分输入：此前 `policy_research` 排在扫描器之后、`ds_scanner.py` 也从不读它，政策对操作建议零影响。现调整 workflow 顺序并接线，边界见 `X-Plan.md` 模块11。② MA20 份额折算断层修正（半导体ETF −29.64% 差 0.36 个百分点绕过阈值被判"有效"，政策满分标的被静默除名）。③ 政策事件 `published_at` 不再兜底成当天（衰减机制此前是死代码）。三项均补回归测试 |
+| **v3.3 政策归类交给 AI + 源按 ETF 重构** | 2026-07-29 | 事件归到哪个板块、判 ± 改由 AI 判定（`X-Plan.md` 模块11），关键词表退为兜底；因 DeepSeek 无联网能力拆成两趟（选读 → 抓正文 → 判方向），失败整体退回关键词并在 report/Bark 显式标注。源从 15 个扩到 31 个、按 ETF 板块配齐（17 个板块全部 ≥2 个供数的源，采集 231→677 条），新增 `check_etf_coverage.py` 把口径变成可核对的数字。看板政策加减分可逐条穿透（标题+原文链接+日期+贡献分值） |
+| **政策链路四连修** | 2026-07-29 | ① 一对半角引号造成 `compare_policy_decision.py` 语法错误，政策停摆 2 天 5 次扫描无人察觉——门禁加 `compileall`，政策状态进 Bark。② 年龄护栏把解析对的 2021 旧日期判成"没日期"、下游再兜底成今天，造出不死僵尸，3 个生效主题全由僵尸驱动。③ 4 个 rank-S 源哑掉（JS 跳转壳页 / 子域名没进白名单），HTTP 200 且 `error_count` 为 0 完全看不出来。④ 列表页 `MM-DD` 无年份日期解析不了，且爬父容器会抓到邻居的日期 |

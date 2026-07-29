@@ -60,8 +60,49 @@ def date_from_url(url: str):
     return None
 
 
-def date_from_neighbourhood(anchor, title: str):
-    """在链接周围找发布日期：逐层上溯父容器，并剔除标题自身文字避免误读。"""
+# 政务列表页很常见只标月日不标年，例如证监会要闻列表的 "证监会同意…注册 07-24"。
+MONTH_DAY_PATTERN = re.compile(r"(?<!\d)(\d{1,2})-(\d{1,2})(?!\d)")
+# 认月日的前提：剔除标题后，这个日期几乎就是残留文本的全部（列表行的日期单元格）。
+# 光按字数卡不住——"3-5家公司参与本次试点安排并逐步扩大范围"才 22 个字符，
+# 却会把 "3-5" 读成 3月5日。所以改成看"除日期外还剩多少字"。
+MONTH_DAY_MAX_RESIDUE = 2
+_RESIDUE_STRIP = " \t\r\n·|/、，,。.-—［］[]()（）:："
+
+
+def date_from_month_day(text: str, today: datetime = None):
+    """解析不带年份的 MM-DD，年份就近推断：推出来落在未来就取前一年。
+
+    只认"整行就是个日期"的情形，见 MONTH_DAY_MAX_RESIDUE。宁可认不出让事件被排除，
+    也不能把正文里的数字范围当成日期——那又是一个"看起来合理的默认值"。
+    """
+    today = today or datetime.now()
+    text = (text or "").strip()
+    if not text:
+        return None
+    match = MONTH_DAY_PATTERN.search(text)
+    if not match:
+        return None
+    residue = MONTH_DAY_PATTERN.sub(" ", text, count=1).strip(_RESIDUE_STRIP)
+    if len(residue) > MONTH_DAY_MAX_RESIDUE:
+        return None
+    month, day = int(match.group(1)), int(match.group(2))
+    for year in (today.year, today.year - 1):
+        try:
+            candidate = datetime(year, month, day)
+        except ValueError:
+            return None
+        if candidate.date() <= today.date():
+            return candidate
+    return None
+
+
+def date_from_neighbourhood(anchor, title: str, today: datetime = None):
+    """在链接周围找发布日期：逐层上溯父容器，并剔除标题自身文字避免误读。
+
+    每层先认完整日期、再认月日，认到就返回，**不再往上爬**。
+    往上爬一层就会看到兄弟条目的日期：证监会要闻列表里"热轧卷板"那条自己写着
+    07-24，父容器里却先出现上一条的 2026-07-22，爬上去就会张冠李戴。
+    """
     node = anchor
     for _ in range(3):
         node = getattr(node, "parent", None)
@@ -70,7 +111,7 @@ def date_from_neighbourhood(anchor, title: str):
         text = common.compact_text(node.get_text(" "), 400)
         if title:
             text = text.replace(title, " ")
-        found = common.parse_date(text)
+        found = common.parse_date(text) or date_from_month_day(text, today)
         if found:
             return found
     return None
@@ -93,7 +134,7 @@ def resolve_published_at(anchor, url: str, title: str, today: datetime = None):
     （事件会被判过期而排除），解析错成未来日期则会让它永远不过期。
     """
     today = today or datetime.now()
-    for candidate in (date_from_url(url), date_from_neighbourhood(anchor, title)):
+    for candidate in (date_from_url(url), date_from_neighbourhood(anchor, title, today)):
         if not candidate:
             continue
         if (today.date() - candidate.date()).days < 0:

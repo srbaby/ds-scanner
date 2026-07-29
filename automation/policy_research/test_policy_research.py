@@ -160,6 +160,41 @@ class PublishDateTests(unittest.TestCase):
             )
         )
 
+    def test_month_day_without_year_is_parsed(self):
+        """证监会要闻列表多数条目只写 07-24 这种月日，不带年份。"""
+        got = collect.date_from_month_day("07-24", today=datetime(2026, 7, 29))
+        self.assertEqual(got.strftime("%Y-%m-%d"), "2026-07-24")
+
+    def test_month_day_rolls_back_a_year_when_it_would_be_future(self):
+        got = collect.date_from_month_day("12-31", today=datetime(2026, 7, 29))
+        self.assertEqual(got.strftime("%Y-%m-%d"), "2025-12-31")
+
+    def test_month_day_ignores_number_ranges_in_prose(self):
+        """只认"整行就是个日期"，正文里的数字范围不能当日期。"""
+        self.assertIsNone(
+            collect.date_from_month_day(
+                "3-5家公司参与本次试点安排并逐步扩大范围", today=datetime(2026, 7, 29)
+            )
+        )
+        self.assertIsNone(
+            collect.date_from_month_day("07-24 来源：中国证监会办公厅发布", today=datetime(2026, 7, 29))
+        )
+
+    def test_neighbour_row_date_does_not_leak_into_this_row(self):
+        """爬父容器会看到兄弟条目的日期，本行自己写了月日就必须用自己的。"""
+        soup = BeautifulSoup(
+            "<ul>"
+            '<li><a href="/a.shtml">上一条公告</a><span>2026-07-22</span></li>'
+            '<li><a href="/b.shtml">证监会同意热轧卷板、不锈钢期权注册</a><span>07-24</span></li>'
+            "</ul>",
+            "html.parser",
+        )
+        anchor = soup.find_all("a")[1]
+        got = collect.date_from_neighbourhood(
+            anchor, "证监会同意热轧卷板、不锈钢期权注册", today=datetime(2026, 7, 29)
+        )
+        self.assertEqual(got.strftime("%Y-%m-%d"), "2026-07-24")
+
     def test_old_date_is_returned_not_discarded_as_unknown(self):
         """曾有 3 年上限，把解析对的 2021-12-03 判成"没有日期"，下游再兜底成今天。
 

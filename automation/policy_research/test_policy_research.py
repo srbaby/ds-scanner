@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import json
 import os
 import sys
 import unittest
@@ -330,6 +331,94 @@ class EstimatedDateDecayTests(unittest.TestCase):
         self.assertEqual(payload["effective_delta"], 0.5)
 
 
+class AIClassifyTests(unittest.TestCase):
+    """AI 归类（X-Plan.md 模块11）。重点守两件事：不越权、失败必须吭声。"""
+
+    def _raw(self, raw_id, title, url="https://x/a.htm"):
+        return {"raw_id": raw_id, "source": "证监会政策法规", "source_rank": "S",
+                "title": title, "url": url, "published_at": "2026-07-29"}
+
+    def test_prefilter_drops_sectors_without_etf(self):
+        """AI算力/大消费这类没有对应 ETF 的板块不送审——判了也影响不了任何操作。"""
+        from policy_research import ai_classify
+        cfg = extract.load_theme_config()
+        rows = [self._raw("a", "证监会同意开展证券公司业务试点"),
+                self._raw("b", "商务部关于开展绿色消费试点工作的通知")]
+        items = ai_classify.prefilter(rows, extract.map_themes, cfg, ["证券"])
+        self.assertEqual([i["id"] for i in items], ["a"])
+        self.assertEqual(items[0]["candidate_sectors"], ["证券"])
+
+    def test_sector_floor_backfills_without_cross_sector_substitution(self):
+        """冷门板块靠 AI 自觉会被热门挤掉，保底只补不减，且不许跨板块顶替。"""
+        from policy_research import ai_classify
+        items = [
+            {"id": "s1", "candidate_sectors": ["证券"]},
+            {"id": "s2", "candidate_sectors": ["证券"]},
+            {"id": "s3", "candidate_sectors": ["证券"]},
+            {"id": "c1", "candidate_sectors": ["煤炭"]},
+            {"id": "c2", "candidate_sectors": ["煤炭"]},
+        ]
+        chosen = ai_classify.ensure_sector_floor(items, ["s1", "s2", "s3"])
+        self.assertEqual(chosen[:3], ["s1", "s2", "s3"])   # AI 的选择一条不减
+        self.assertIn("c1", chosen)
+        self.assertIn("c2", chosen)
+
+    def test_pass2_rejects_out_of_bound_and_unknown_sector(self):
+        """模型给越界强度或不存在的板块时必须丢掉，不能溢出到下游打分。"""
+        from policy_research import ai_classify
+        from unittest.mock import patch
+        payload = {"results": [
+            {"id": "a", "sector": "证券", "direction": "positive", "strength": 99},
+            {"id": "b", "sector": "不存在的板块", "direction": "positive", "strength": 3},
+            {"id": "c", "sector": "证券", "direction": "neutral", "strength": 3},
+            {"id": "zzz", "sector": "证券", "direction": "positive", "strength": 3},
+        ]}
+        items = [{"id": x, "candidate_sectors": ["证券"], "title": "t", "excerpt": ""}
+                 for x in ("a", "b", "c")]
+        with patch.object(ai_classify, "_chat",
+                          return_value={"ok": True, "text": json.dumps(payload), "error": None}):
+            got = ai_classify.pass2_classify(items, ["证券"])
+        self.assertTrue(got["ok"])
+        self.assertEqual(set(got["results"]), {"a"})      # b越界板块/c中性/zzz非入参 全丢
+        self.assertEqual(got["results"]["a"]["strength"], 5)  # 99 夹回 5
+
+    def test_parse_json_survives_code_fence_and_chatter(self):
+        from policy_research import ai_classify
+        self.assertEqual(
+            ai_classify.parse_json_object('```json\n{"read": ["a"]}\n```'), {"read": ["a"]})
+        self.assertEqual(
+            ai_classify.parse_json_object('好的，结果如下：\n{"read": ["b"]}\n希望有帮助'),
+            {"read": ["b"]})
+        self.assertIsNone(ai_classify.parse_json_object("完全不是 JSON"))
+
+    def test_ai_failure_falls_back_to_keyword_with_reason(self):
+        """AI 挂了要退回关键词并带上原因——绝不静默（红线 4）。"""
+        from policy_research import ai_classify
+        from unittest.mock import patch
+        cfg = extract.load_theme_config()
+        with patch.object(ai_classify, "DEEPSEEK_API_KEY", ""):
+            got = ai_classify.classify([self._raw("a", TITLE)], extract.map_themes, cfg)
+        self.assertFalse(got["ok"])
+        self.assertIn("DEEPSEEK_API_KEY", got["reason"])
+        self.assertEqual(got["verdicts"], {})
+
+    def test_only_ai_judged_items_become_events(self):
+        """AI 判过的才成为事件；没被选读的是噪音，不能用关键词捞回来。"""
+        rows = [self._raw("a", TITLE), self._raw("b", "证监会同意开展证券公司业务试点")]
+        verdicts = {"a": {"sector": "证券", "direction": "negative", "strength": 3,
+                          "duplicate_of": None}}
+        events, _ = extract.extract_events(rows, ai_verdicts=verdicts)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["themes"], ["证券"])
+        self.assertEqual(events[0]["direction"], "negative")
+        self.assertEqual(events[0]["evidence_strength"], 3)
+
+    def test_none_verdicts_keeps_keyword_path(self):
+        """ai_verdicts 为 None 时行为与改造前一致（兜底路径）。"""
+        events, _ = extract.extract_events([self._raw("a", TITLE)], ai_verdicts=None)
+        self.assertEqual(len(events), 1)
+
+
 class SourceHealthTests(unittest.TestCase):
     """全源采集失败必须留下痕迹，否则和"今天没新政策"长得一模一样。"""
 
@@ -381,6 +470,30 @@ class SourceHealthTests(unittest.TestCase):
                 health = score.source_health()
         self.assertFalse(health["collect_ran"])
         self.assertEqual(health["source_total"], 0)
+
+    def test_confidence_counts_distinct_sources_not_entries(self):
+        """同一个源的多份同名文件合并后不能算"多源佐证"。
+
+        证监会一天挂 6 份都叫《行政处罚决定书》的文件，标题归一后并成一条事件，
+        按条目数算就成了 6 个源佐证，置信度被凭空抬到 high。
+        """
+        def row(source, url):
+            # 用 B 级源压低 evidence_strength，隔离出"多源佐证"这条提升路径本身，
+            # 否则 strength>=4 会先把置信度抬成 high，测不到要测的东西
+            return {
+                "raw_id": url, "source": source, "source_rank": "B",
+                "title": TITLE, "url": url, "published_at": "2026-07-29",
+            }
+
+        same, _ = extract.extract_events([row("证券时报", f"/a{i}.htm") for i in range(6)])
+        self.assertEqual(len(same), 1)
+        self.assertEqual(len(same[0]["sources"]), 6)
+        self.assertLess(same[0]["evidence_strength"], 4)
+        self.assertNotEqual(same[0]["confidence"], "high")
+
+        cross, _ = extract.extract_events([row("证券时报", "/a.htm"), row("中国证券报", "/b.htm")])
+        self.assertEqual(len(cross), 1)
+        self.assertEqual(cross[0]["confidence"], "high")
 
     def test_zero_yield_source_is_recorded(self):
         """HTTP 200 但一条都没抓到的源必须留痕：error_count 永远看不出这种废源。

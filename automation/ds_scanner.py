@@ -309,7 +309,16 @@ def load_policy_deltas(today: date = None) -> Dict:
         active = int((row or {}).get("active_delta") or 0)
         if active:
             deltas[theme] = active
-    return {"ok": True, "as_of": as_of_text, "deltas": deltas, "reason": ""}
+    return {
+        "ok": True,
+        "as_of": as_of_text,
+        "deltas": deltas,
+        "reason": "",
+        # AI 归类挂了会退回关键词兜底。数据本身仍可用，所以不判 not ok，
+        # 但必须让它一路显示到 Bark——兜底悄悄发生就是红线 4 说的那种事故
+        "classifier": health.get("classifier") or "keyword",
+        "classifier_reason": health.get("classifier_reason") or "",
+    }
 
 
 def policy_decision_block(policy_state: Dict) -> Dict:
@@ -325,6 +334,8 @@ def policy_decision_block(policy_state: Dict) -> Dict:
         "as_of": policy_state.get("as_of"),
         "reason": policy_state.get("reason"),
         "applied": policy_state.get("applied") or {},
+        "classifier": policy_state.get("classifier") or "keyword",
+        "classifier_reason": policy_state.get("classifier_reason") or "",
     }
 
 
@@ -1893,6 +1904,11 @@ def policy_adjustment_section(etf_list, policy_state: Dict) -> List[str]:
         lines.append(f"- ⚠️ **{reason}**，本次按纯手工 base 分计算，政策未参与评分")
         return lines
 
+    if (policy_state.get("classifier") or "keyword") == "keyword":
+        why = policy_state.get("classifier_reason") or "AI 分类未启用"
+        lines.append(f"- ⚠️ **归类由关键词兜底**（{why}），非 AI 判定")
+    else:
+        lines.append("- 归类方式：AI 判定（X-Plan.md 模块11）")
     lines.append(f"- 政策数据日期：{policy_state.get('as_of')}")
     applied = policy_state.get("applied") or {}
     if not applied:

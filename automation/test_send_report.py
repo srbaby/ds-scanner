@@ -208,6 +208,27 @@ class SendReportTests(unittest.TestCase):
         self.assertIn("证券+1", body)
         self.assertIn("半导体-2", body)
 
+    def test_bark_body_flags_keyword_fallback(self):
+        """AI 归类退回关键词兜底必须吭声，否则又是一次静默降级。"""
+        dashboard = self.dashboard()
+        dashboard["decision"]["policy"] = {
+            "ok": True, "as_of": "2026-07-29", "reason": "", "applied": {"证券": 1},
+            "classifier": "keyword", "classifier_reason": "第二趟失败: HTTP 429",
+        }
+        body = send_report.build_bark_body("扫描报告正文", dashboard)
+        self.assertIn("政策归类由关键词兜底", body)
+        self.assertIn("HTTP 429", body)
+        self.assertIn("🏛️ 政策已计入", body)
+
+    def test_bark_body_quiet_when_ai_classifier_worked(self):
+        dashboard = self.dashboard()
+        dashboard["decision"]["policy"] = {
+            "ok": True, "as_of": "2026-07-29", "reason": "", "applied": {"证券": 1},
+            "classifier": "ai", "classifier_reason": "",
+        }
+        body = send_report.build_bark_body("扫描报告正文", dashboard)
+        self.assertNotIn("关键词兜底", body)
+
     def test_bark_body_stays_quiet_without_policy_block(self):
         """崩溃降级路径写的最小 decision.json 没有 policy 键，不能因此炸掉推送。"""
         dashboard = self.dashboard()

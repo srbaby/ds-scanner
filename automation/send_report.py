@@ -131,11 +131,16 @@ def policy_status_lines(dashboard_data):
     if not policy.get("ok"):
         reason = policy.get("reason") or "政策数据不可用"
         return [f"⚠️ 政策未计入：{reason}（本次为纯手工 base 分）", ""]
+    # AI 归类退回关键词兜底时必须吭声，否则又是一次静默降级
+    fallback = []
+    if policy.get("classifier") == "keyword":
+        why = policy.get("classifier_reason") or "AI 分类未启用"
+        fallback = [f"⚠️ 政策归类由关键词兜底：{why}"]
     applied = policy.get("applied") or {}
     if not applied:
-        return []
+        return fallback + [""] if fallback else []
     moved = "、".join(f"{theme}{delta:+d}" for theme, delta in sorted(applied.items()))
-    return [f"🏛️ 政策已计入 {policy.get('as_of')}：{moved}", ""]
+    return fallback + [f"🏛️ 政策已计入 {policy.get('as_of')}：{moved}", ""]
 
 
 def build_bark_body(report_text, dashboard_data=None):

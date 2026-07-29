@@ -170,6 +170,182 @@
         "www.stcn.com"
       ],
       "enabled": true
+    },
+    {
+      "id": "mct_policy",
+      "name": "文旅部政策公开",
+      "rank": "S",
+      "region": "CN",
+      "url": "https://zwgk.mct.gov.cn/zfxxgkml/",
+      "allowed_domains": [
+        "mct.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "mct_news",
+      "name": "文旅部要闻",
+      "rank": "A",
+      "region": "CN",
+      "url": "https://www.mct.gov.cn/whzx/whyw/",
+      "allowed_domains": [
+        "mct.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "most_policy",
+      "name": "科技部法规政策",
+      "rank": "S",
+      "region": "CN",
+      "url": "https://www.most.gov.cn/xxgk/xinxifenlei/fdzdgknr/fgzc/",
+      "allowed_domains": [
+        "most.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "mod_news",
+      "name": "国防部新闻发布",
+      "rank": "A",
+      "region": "CN",
+      "url": "http://www.mod.gov.cn/gfbw/xwfyr/",
+      "allowed_domains": [
+        "mod.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "ndrc_news",
+      "name": "发改委新闻发布",
+      "rank": "A",
+      "region": "CN",
+      "url": "https://www.ndrc.gov.cn/xwdt/xwfb/",
+      "allowed_domains": [
+        "ndrc.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "pbc_policy",
+      "name": "央行货币政策",
+      "rank": "S",
+      "region": "CN",
+      "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125440/index.html",
+      "allowed_domains": [
+        "pbc.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "sasac_news",
+      "name": "国资委监管动态",
+      "rank": "A",
+      "region": "CN",
+      "url": "http://www.sasac.gov.cn/n2588025/n2588124/index.html",
+      "allowed_domains": [
+        "sasac.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "mnr_news",
+      "name": "自然资源部要闻",
+      "rank": "A",
+      "region": "CN",
+      "url": "https://www.mnr.gov.cn/dt/ywbb/",
+      "allowed_domains": [
+        "mnr.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "nhsa_policy",
+      "name": "医保局政策法规",
+      "rank": "A",
+      "region": "CN",
+      "url": "https://www.nhsa.gov.cn/col/col104/index.html",
+      "allowed_domains": [
+        "nhsa.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "escn_energy",
+      "name": "中国储能网",
+      "rank": "B",
+      "region": "CN",
+      "url": "http://www.escn.com.cn/",
+      "allowed_domains": [
+        "escn.com.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "itdcw_battery",
+      "name": "电池网",
+      "rank": "B",
+      "region": "CN",
+      "url": "https://www.itdcw.com/",
+      "allowed_domains": [
+        "itdcw.com"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "chinania_metal",
+      "name": "有色金属工业协会",
+      "rank": "B",
+      "region": "CN",
+      "url": "https://www.chinania.org.cn/html/hangyexinwen/",
+      "allowed_domains": [
+        "chinania.org.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "smm_metal",
+      "name": "上海有色网",
+      "rank": "B",
+      "region": "CN",
+      "url": "https://news.smm.cn/",
+      "allowed_domains": [
+        "smm.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "cs_news",
+      "name": "中国证券报",
+      "rank": "B",
+      "region": "CN",
+      "url": "https://www.cs.com.cn/xwzx/",
+      "allowed_domains": [
+        "cs.com.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "samr_food",
+      "name": "市场监管总局食品",
+      "rank": "A",
+      "region": "CN",
+      "url": "https://www.samr.gov.cn/spscs/sjdt/",
+      "allowed_domains": [
+        "samr.gov.cn"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "cada_liquor",
+      "name": "中国酒业协会",
+      "rank": "B",
+      "region": "CN",
+      "url": "http://www.cada.cc/",
+      "allowed_domains": [
+        "cada.cc"
+      ],
+      "enabled": true
     }
   ]
 }

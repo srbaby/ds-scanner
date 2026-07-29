@@ -170,6 +170,7 @@ def source_health() -> Dict:
     静默降级正是这么发生的。
     """
     snapshot = common.load_json(common.SNAPSHOT_DIR / "last_collect.json", {}) or {}
+    extract_snap = common.load_json(common.SNAPSHOT_DIR / "last_extract.json", {}) or {}
     total = int(snapshot.get("source_total") or 0)
     errors = int(snapshot.get("error_count") or 0)
     return {
@@ -179,6 +180,9 @@ def source_health() -> Dict:
         "all_sources_failed": bool(snapshot.get("all_sources_failed")),
         # 采集快照缺失说明 collect 阶段压根没跑成，同样不可信
         "collect_ran": bool(snapshot),
+        # 归类是 AI 判的还是关键词兜底的，一路带到扫描器再进 Bark（红线 4）
+        "classifier": extract_snap.get("classifier") or "keyword",
+        "classifier_reason": extract_snap.get("ai_reason") or "",
     }
 
 

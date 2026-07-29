@@ -26,6 +26,7 @@ def main() -> int:
     parser.add_argument("--skip-collect", action="store_true", help="只处理已有 raw 数据")
     parser.add_argument("--days", type=int, default=7)
     parser.add_argument("--score-days", type=int, default=90)
+    parser.add_argument("--no-ai", action="store_true", help="强制走关键词兜底，不调 AI")
     args = parser.parse_args()
 
     all_sources_failed = False
@@ -41,7 +42,16 @@ def main() -> int:
         zero = collect.get("zero_yield_sources") or []
         if zero:
             print(f"ℹ️ 本次 0 产出的源（{len(zero)}/{collect['source_total']}）：{'、'.join(zero)}")
-    extract = run_extract(args.days)
+    extract = run_extract(args.days, use_ai=not args.no_ai)
+    st = extract.get("ai_stats") or {}
+    if extract.get("ai_ok"):
+        print(
+            f"classify: AI({extract.get('ai_model')}) 粗筛{st.get('prefiltered', 0)}条"
+            f"→选读{st.get('picked', 0)}条(抓到正文{st.get('fetched', 0)})"
+            f"→判定{st.get('classified', 0)}条"
+        )
+    else:
+        print(f"⚠️ classify: 归类退回关键词兜底——{extract.get('ai_reason')}")
     print(
         f"extract: {extract['new_event_count']} new events"
         f"，{extract['skipped_no_date_count']} 条因无发布日期被排除"

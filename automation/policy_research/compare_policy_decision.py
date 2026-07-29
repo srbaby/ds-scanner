@@ -323,7 +323,7 @@ def render_report(report: Dict) -> None:
         "# Policy Event Shadow 决策影响报告",
         "",
         f"- 生成时间：{report['generated_at']}",
-        "- 模式：政策事件已计入扫描器四维评分；本报告是"不含政策 vs 含政策"的贡献分解，不回写 etf_base_config.json。",
+        "- 模式：政策事件已计入扫描器四维评分；本报告是「不含政策 vs 含政策」的贡献分解，不回写 etf_base_config.json。",
         f"- delta 日期：{report.get('delta_as_of')}",
         "",
         "## 激进度",

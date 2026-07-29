@@ -65,9 +65,10 @@ jobs:
         env:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-          # 事件归类与方向由 AI 判定（X-Plan.md 模块11）。key 缺失或调用失败
+          # 事件归类与方向由 Gemini 判定（X-Plan.md 模块11）。key 缺失或调用失败
           # 会整体退回关键词兜底，并在 report 与 Bark 里显式标注，不会静默。
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          POLICY_AI_PROVIDER: gemini
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         continue-on-error: true
 
       - name: 运行扫描并保存报告

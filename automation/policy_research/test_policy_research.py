@@ -398,13 +398,43 @@ class AIClassifyTests(unittest.TestCase):
                 {"message": {"content": '{"read":[]}'}, "finish_reason": "stop"}]}
             return resp
 
-        with patch.object(ai_classify, "DEEPSEEK_API_KEY", "k"), \
+        with patch.object(ai_classify, "POLICY_AI_PROVIDER", "deepseek"), \
+             patch.object(ai_classify, "DEEPSEEK_API_KEY", "k"), \
              patch.object(ai_classify.requests, "post", fake_post):
             got = ai_classify._chat("含 JSON 样例的系统提示", "{}", max_tokens=4096)
         self.assertTrue(got["ok"])
         self.assertEqual(sent["thinking"], {"type": "disabled"})
         self.assertEqual(sent["response_format"], {"type": "json_object"})
         self.assertEqual(sent["temperature"], 0)
+
+    def test_gemini_uses_3_6_flash_json_request(self):
+        from policy_research import ai_classify
+        from unittest.mock import patch, MagicMock
+        sent = {}
+
+        def fake_post(url, headers=None, json=None, proxies=None, timeout=None):
+            sent["url"] = url
+            sent["headers"] = headers
+            sent["payload"] = json
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {"candidates": [{
+                "content": {"parts": [{"text": '{"read":[]}' }]},
+                "finishReason": "STOP",
+            }]}
+            return resp
+
+        with patch.object(ai_classify, "POLICY_AI_PROVIDER", "gemini"), \
+             patch.object(ai_classify, "GEMINI_API_KEY", "k"), \
+             patch.object(ai_classify.requests, "post", fake_post):
+            got = ai_classify._chat("系统提示", "{}", max_tokens=4096)
+        self.assertTrue(got["ok"])
+        self.assertIn("gemini-3.6-flash:generateContent", sent["url"])
+        self.assertEqual(sent["headers"]["x-goog-api-key"], "k")
+        self.assertEqual(
+            sent["payload"]["generationConfig"]["responseMimeType"], "application/json"
+        )
+        self.assertNotIn("temperature", sent["payload"]["generationConfig"])
 
     def test_empty_content_error_carries_diagnosis(self):
         """空返回的报错必须带 finish_reason / reasoning 长度，否则下次还得再猜一轮。"""
@@ -420,7 +450,8 @@ class AIClassifyTests(unittest.TestCase):
                 "usage": {"completion_tokens": 2048}}
             return resp
 
-        with patch.object(ai_classify, "DEEPSEEK_API_KEY", "k"), \
+        with patch.object(ai_classify, "POLICY_AI_PROVIDER", "deepseek"), \
+             patch.object(ai_classify, "DEEPSEEK_API_KEY", "k"), \
              patch.object(ai_classify, "DEEPSEEK_RETRIES", 0), \
              patch.object(ai_classify.requests, "post", fake_post):
             got = ai_classify._chat("sys", "{}", max_tokens=2048)
@@ -443,10 +474,11 @@ class AIClassifyTests(unittest.TestCase):
         from policy_research import ai_classify
         from unittest.mock import patch
         cfg = extract.load_theme_config()
-        with patch.object(ai_classify, "DEEPSEEK_API_KEY", ""):
+        with patch.object(ai_classify, "POLICY_AI_PROVIDER", "gemini"), \
+             patch.object(ai_classify, "GEMINI_API_KEY", ""):
             got = ai_classify.classify([self._raw("a", TITLE)], extract.map_themes, cfg)
         self.assertFalse(got["ok"])
-        self.assertIn("DEEPSEEK_API_KEY", got["reason"])
+        self.assertIn("GEMINI_API_KEY", got["reason"])
         self.assertEqual(got["verdicts"], {})
 
     def test_only_ai_judged_items_become_events(self):

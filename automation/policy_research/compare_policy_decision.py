@@ -305,15 +305,28 @@ def run_compare() -> Dict:
     if not delta_report:
         raise RuntimeError("没有 policy delta，请先运行 score_policy_delta.py")
     base_scores = ds_scanner.load_base_scores()
+
+    # 政策对比运行在主扫描器之前，不能把可能已被旧 delta 污染的池当成基线。
+    # 发现异常时只终止 compare；不反推当前 delta，也不在这里修补/写回旧池，
+    # 后续主扫描器会用人工 base 重刷本地与 Gist。
+    etf_pool = ds_scanner.load_etf_pool()
+    if not etf_pool:
+        raise RuntimeError("data/etf_pool.json 不可用")
+    pool_issues = ds_scanner.validate_etf_pool_bases(etf_pool, base_scores)
+    if pool_issues:
+        details = "\n".join(f"- {issue}" for issue in pool_issues)
+        raise RuntimeError(
+            "etf_pool 基础分校验失败，拒绝执行政策对比；"
+            "不反推、不修补旧池，等待主扫描器用人工 base 重刷：\n"
+            f"{details}"
+        )
+
     holdings_config = ds_scanner.load_holdings()
     cash_available = holdings_config.get("cash_available", 0)
     holding_symbols = {row["symbol"] for row in holdings_config.get("holdings", []) if row.get("qty", 0) > 0}
 
     market = ds_scanner.scan_market()
     index_change = market["index"].get("change_pct", 0) if market["index"].get("ok") else 0
-    etf_pool = ds_scanner.load_etf_pool()
-    if not etf_pool:
-        raise RuntimeError("data/etf_pool.json 不可用")
     holdings_data, _, total_value, _ = ds_scanner.scan_holdings_with_wave_management(
         holdings_config, market["realtime"], etf_pool
     )
@@ -394,7 +407,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
 
 
 

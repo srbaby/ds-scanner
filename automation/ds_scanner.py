@@ -447,8 +447,8 @@ def generate_holdings_template():
         print(f"⚠️ 生成模板失败: {e}")
 
 
-def should_refresh_policy():
-    """判断是否需要刷新基础逻辑分数（字段名沿用 policy 以兼容旧数据）。"""
+def should_refresh_etf_pool():
+    """判断是否需要刷新 ETF 池。"""
     if not os.path.exists("data/etf_pool.json"):
         return True, "首次运行，全量扫描"
 
@@ -464,6 +464,62 @@ def should_refresh_policy():
         return True, f"距上次扫描{days_ago}天，每日刷新"
 
     return False, f"今日已扫描，跳过"
+
+
+def validate_etf_pool_bases(etf_pool: Dict, manual_base_scores: Dict) -> List[str]:
+    """纯校验 ETF 池是否仍由人工 base 分生成。
+
+    这里不读取文件、不打印、不修正输入，也不尝试从旧值反推出政策 delta。
+    旧池一旦与人工配置不一致，调用方必须拒绝沿用并重新刷新；这是因为旧文件
+    可能来自不同日期，当前 delta 无法可靠还原它的来源。
+    """
+    issues = []
+    manual_base_scores = manual_base_scores or {}
+
+    for code, pool_info in (etf_pool or {}).items():
+        if not isinstance(pool_info, dict):
+            issues.append(f"{code}: ETF 池记录不是对象，无法校验人工 base 分")
+            continue
+
+        category = pool_info.get("category")
+        if category not in manual_base_scores:
+            issues.append(f"{code}（{pool_info.get('name', '')}）: 板块{category!r}没有人工 base 配置")
+            continue
+
+        expected_base = manual_base_scores[category]
+        breakdown = pool_info.get("_breakdown") or {}
+        actual_base = breakdown.get("base") if "base" in breakdown else None
+        if actual_base != expected_base:
+            issues.append(
+                f"{code}（{pool_info.get('name', '')}）板块{category}的"
+                f"_breakdown.base={actual_base!r}，人工配置={expected_base!r}；"
+                "疑似旧政策 delta 污染，拒绝沿用"
+            )
+
+        missing_parts = [part for part in ("tech", "strength") if part not in breakdown]
+        if missing_parts:
+            issues.append(
+                f"{code}（{pool_info.get('name', '')}）缺少 _breakdown.{','.join(missing_parts)}，"
+                "无法验证 policy 构成，拒绝沿用"
+            )
+        elif "policy" not in pool_info:
+            issues.append(f"{code}（{pool_info.get('name', '')}）缺少 policy，拒绝沿用")
+        else:
+            try:
+                expected_policy = actual_base + breakdown["tech"] + breakdown["strength"]
+            except (TypeError, ValueError):
+                issues.append(
+                    f"{code}（{pool_info.get('name', '')}）的 base/tech/strength 不是可计算数值，"
+                    "无法验证 policy 构成，拒绝沿用"
+                )
+                continue
+            if pool_info["policy"] != expected_policy:
+                issues.append(
+                    f"{code}（{pool_info.get('name', '')}）policy={pool_info['policy']!r}，"
+                    f"但人工 base+tech+strength={expected_policy!r}，拒绝沿用"
+                )
+
+    return issues
 
 
 # ============================================================
@@ -906,7 +962,8 @@ def calc_relative_strength_score(etf_change: float, index_change: float) -> int:
     return score
 
 
-def refresh_etf_pool(base_scores: Dict, index_change: float):
+def refresh_etf_pool(manual_base_scores: Dict, index_change: float):
+    """用人工 base 分重建 ETF 池；政策 delta 不得进入这条路径。"""
     print("⏳ 正在刷新ETF池基础逻辑分数...")
     etf_pool = {}
     codes = list(ETF_WATCHLIST_BASE.keys())
@@ -920,7 +977,7 @@ def refresh_etf_pool(base_scores: Dict, index_change: float):
         history = fetch_sina_history(code, 30)
 
         if history is None or len(history) < 20:
-            base_score = base_scores.get(info["category"], 5)
+            base_score = manual_base_scores.get(info["category"], 5)
             etf_pool[code] = {
                 "name": info["name"],
                 "policy": base_score,
@@ -939,7 +996,7 @@ def refresh_etf_pool(base_scores: Dict, index_change: float):
             rt["volume"] * calc_volume_time_factor() / vol_ma5 if vol_ma5 > 0 else 1.0
         )
 
-        base_score = base_scores.get(info["category"], 5)
+        base_score = manual_base_scores.get(info["category"], 5)
         tech_score = calc_tech_position_score(rt["price"], ma20, rsi, vol_ratio)
         strength_score = calc_relative_strength_score(rt["change_pct"], index_change)
 
@@ -1434,7 +1491,7 @@ def scan_etf_pool(
     etf_pool: Dict,
     holding_symbols: set,
     realtime: Dict,
-    base_scores: Dict = None,
+    effective_scoring_base_scores: Dict = None,
     index_change: float = 0.0,
     policy_deltas: Dict = None,
 ):
@@ -1501,13 +1558,22 @@ def scan_etf_pool(
 
         position = "✅持仓" if code in holding_symbols else "⭕无"
         relative_strength = rt["change_pct"] - index_change
-        configured_base = (
-            (base_scores or {}).get(pool_info.get("category"))
-            or (pool_info.get("_breakdown") or {}).get("base")
-            or 0
-        )
-        # base_scores 传进来时已经叠加过政策 delta，这里只是把"动了多少"透出去，
-        # 让报告和看板能显示政策的实际贡献（政策进四维评分，不碰 policy 总分/止损）
+        category = pool_info.get("category")
+        configured_base = None
+        # 这里必须显式判断 key/None：合法的 effective base=0 也要进入四维评分，
+        # 不能因 Python truthiness 回退到旧池的 _breakdown.base。
+        if (
+            effective_scoring_base_scores is not None
+            and category in effective_scoring_base_scores
+            and effective_scoring_base_scores[category] is not None
+        ):
+            configured_base = effective_scoring_base_scores[category]
+        if configured_base is None:
+            breakdown = pool_info.get("_breakdown") or {}
+            configured_base = breakdown["base"] if breakdown.get("base") is not None else 0
+
+        # effective_scoring_base_scores 已叠加政策 delta，只用于四维评分；旧池的
+        # policy/_breakdown 不在这里修正，主流程会先校验并在异常时用人工 base 重刷。
         policy_delta = int((policy_deltas or {}).get(pool_info.get("category")) or 0)
         score = calculate_four_dimensional_score(
             configured_base,
@@ -2128,11 +2194,15 @@ def main(force_refresh=False):
     print("=" * 80)
 
     try:
-        base_scores = load_base_scores()
+        # 政策 delta 只改变四维评分的 policy_catalyst。两套 base 分必须一直并存：
+        # manual_base_scores 供 etf_pool/RISK_STOP，effective_scoring_base_scores
+        # 供 scan_etf_pool 的四维评分；禁止把后者复用到刷新池路径。
+        manual_base_scores = load_base_scores()
+        effective_scoring_base_scores = dict(manual_base_scores)
         policy_state = load_policy_deltas()
         if policy_state["ok"]:
-            base_scores, applied_policy = apply_policy_deltas(
-                base_scores, policy_state["deltas"]
+            effective_scoring_base_scores, applied_policy = apply_policy_deltas(
+                manual_base_scores, policy_state["deltas"]
             )
             if applied_policy:
                 moved = "、".join(
@@ -2154,7 +2224,7 @@ def main(force_refresh=False):
             if h.get("qty", 0) > 0
         }
 
-        need_refresh, reason = should_refresh_policy()
+        need_refresh, reason = should_refresh_etf_pool()
         if force_refresh:
             need_refresh, reason = True, "用户强制刷新"
 
@@ -2165,13 +2235,27 @@ def main(force_refresh=False):
 
         if need_refresh:
             print(f"🔄 {reason}")
-            etf_pool = refresh_etf_pool(base_scores, index_change)
+            etf_pool = refresh_etf_pool(
+                manual_base_scores=manual_base_scores, index_change=index_change
+            )
         else:
             print(f"✅ {reason}")
             etf_pool = load_etf_pool()
             if not etf_pool:
                 print("⚠️ etf_pool.json为空，执行全量扫描")
-                etf_pool = refresh_etf_pool(base_scores, index_change)
+                etf_pool = refresh_etf_pool(
+                    manual_base_scores=manual_base_scores, index_change=index_change
+                )
+            else:
+                pool_issues = validate_etf_pool_bases(etf_pool, manual_base_scores)
+                if pool_issues:
+                    print("🚨 etf_pool 基础分校验失败，拒绝沿用旧本地/Gist值，原因：")
+                    for issue in pool_issues:
+                        print(f"   - {issue}")
+                    print("🔄 本次强制用人工 base 分刷新 ETF 池，不反推或抵扣当前政策 delta")
+                    etf_pool = refresh_etf_pool(
+                        manual_base_scores=manual_base_scores, index_change=index_change
+                    )
 
         holdings_data, wave_cards, total_value, unpriced_holdings = (
             scan_holdings_with_wave_management(
@@ -2182,9 +2266,9 @@ def main(force_refresh=False):
             etf_pool,
             holding_symbols,
             market["realtime"],
-            base_scores,
-            index_change,
-            applied_policy,
+            effective_scoring_base_scores=effective_scoring_base_scores,
+            index_change=index_change,
+            policy_deltas=applied_policy,
         )
         decision = build_authoritative_decision(
             etf_list, holdings_data, total_value, cash_available, unpriced_holdings

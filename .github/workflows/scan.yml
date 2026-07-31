@@ -47,6 +47,7 @@ jobs:
           npm run test:frontend
           PYTHONPATH=automation python -m unittest \
             automation/test_ds_scanner.py \
+            automation/test_compare_policy_decision.py \
             automation/test_gemini_review.py \
             automation/test_generate_dashboard.py \
             automation/test_send_report.py \

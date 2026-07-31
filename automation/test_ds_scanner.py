@@ -494,8 +494,6 @@ class PolicyDeltaInputTests(unittest.TestCase):
             with_policy["score"]["policy_catalyst"] - plain["score"]["policy_catalyst"], 2
         )
         self.assertEqual(with_policy["score"]["total"] - plain["score"]["total"], 2)
-        # 政策不碰 policy 总分，因此不可能触发/压制 RISK_STOP
-        self.assertEqual(with_policy["policy"], plain["policy"])
 
     def test_report_section_states_when_policy_did_not_apply(self):
         lines = ds_scanner.policy_adjustment_section(
@@ -541,6 +539,177 @@ class PolicyDeltaInputTests(unittest.TestCase):
         self.assertFalse(block["ok"])
         self.assertIn("缺失", block["reason"])
         self.assertEqual(block["applied"], {})
+
+
+class PolicyBaseIsolationTests(unittest.TestCase):
+    """政策 delta 只能进入四维评分，不能污染 ETF 池的持仓 policy。"""
+
+    def _refresh_single_etf(self, manual_base):
+        code = "sh588000"
+        watchlist = {code: {"name": "测试ETF", "category": "测试"}}
+        with patch.object(ds_scanner, "ETF_WATCHLIST_BASE", watchlist), patch.object(
+            ds_scanner, "fetch_sina_realtime", return_value={code: {}}
+        ), patch.object(ds_scanner, "fetch_sina_history", return_value=None), patch.object(
+            ds_scanner, "_save_etf_pool"
+        ):
+            return ds_scanner.refresh_etf_pool({"测试": manual_base}, 0)
+
+    def _holding_action(self, etf_pool):
+        holdings = {
+            "holdings": [
+                {
+                    "symbol": "sh588000",
+                    "qty": 100,
+                    "cost": 1.0,
+                    "buy_date": date.today().isoformat(),
+                    "wave_type": "快速波段",
+                }
+            ]
+        }
+        realtime = {"sh588000": {"name": "测试ETF", "price": 1.0}}
+        with patch.object(ds_scanner, "fetch_sina_history", return_value=None):
+            holdings_data, _, _, _ = ds_scanner.scan_holdings_with_wave_management(
+                holdings, realtime, etf_pool
+            )
+        return holdings_data[0]["action"]
+
+    def test_refresh_etf_pool_uses_manual_base_even_when_delta_exists(self):
+        for manual_base, delta in ((14, 1), (15, -1)):
+            with self.subTest(manual_base=manual_base, delta=delta):
+                effective, applied = ds_scanner.apply_policy_deltas(
+                    {"测试": manual_base}, {"测试": delta}
+                )
+                self.assertEqual(effective["测试"], manual_base + delta)
+                self.assertEqual(applied, {"测试": delta})
+
+                pool = self._refresh_single_etf(manual_base)
+                self.assertEqual(pool["sh588000"]["policy"], manual_base)
+                self.assertEqual(pool["sh588000"]["_breakdown"]["base"], manual_base)
+
+    def test_manual_policy_14_delta_plus_1_still_triggers_risk_stop(self):
+        pool = self._refresh_single_etf(14)
+        self.assertIn("RISK_STOP", self._holding_action(pool))
+
+    def test_manual_policy_15_delta_minus_1_does_not_trigger_risk_stop(self):
+        pool = self._refresh_single_etf(15)
+        self.assertNotIn("RISK_STOP", self._holding_action(pool))
+
+    def test_validate_etf_pool_rejects_delta_polluted_base(self):
+        pool = {
+            "sh512880": {
+                "name": "证券ETF",
+                "category": "证券",
+                "policy": 8,
+                "_breakdown": {"base": 2, "tech": 6, "strength": 0},
+            }
+        }
+        issues = ds_scanner.validate_etf_pool_bases(pool, {"证券": 3})
+        self.assertTrue(issues)
+        self.assertIn("_breakdown.base=2", issues[0])
+        self.assertIn("人工配置=3", issues[0])
+        self.assertIn("拒绝沿用", issues[0])
+
+    def test_main_forces_manual_refresh_for_polluted_loaded_pool(self):
+        import os
+        import tempfile
+
+        manual = {"证券": 3}
+        polluted_pool = {
+            "sh512880": {
+                "name": "证券ETF",
+                "category": "证券",
+                "policy": 8,
+                "_breakdown": {"base": 2, "tech": 6, "strength": 0},
+            }
+        }
+        refreshed_pool = {
+            "sh512880": {
+                "name": "证券ETF",
+                "category": "证券",
+                "policy": 9,
+                "_breakdown": {"base": 3, "tech": 6, "strength": 0},
+            }
+        }
+        policy_state = {
+            "ok": True,
+            "as_of": "2026-07-31",
+            "deltas": {"证券": 1},
+            "reason": "",
+        }
+        market = {"index": {"ok": True, "change_pct": 0}, "realtime": {}}
+        holdings = {"cash_available": 1000, "holdings": []}
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            ds_scanner, "DECISION_FILE", os.path.join(tmpdir, "decision.json")
+        ), patch.object(ds_scanner, "load_base_scores", return_value=manual), patch.object(
+            ds_scanner, "load_policy_deltas", return_value=policy_state
+        ), patch.object(ds_scanner, "load_holdings", return_value=holdings), patch.object(
+            ds_scanner, "should_refresh_etf_pool", return_value=(False, "今日已扫描，跳过")
+        ), patch.object(ds_scanner, "load_etf_pool", return_value=polluted_pool), patch.object(
+            ds_scanner, "refresh_etf_pool", return_value=refreshed_pool
+        ) as refresh, patch.object(ds_scanner, "scan_market", return_value=market), patch.object(
+            ds_scanner,
+            "scan_holdings_with_wave_management",
+            return_value=([], [], 0, []),
+        ), patch.object(ds_scanner, "scan_etf_pool", return_value=[]) as scan, patch.object(
+            ds_scanner,
+            "build_authoritative_decision",
+            return_value={"operations": [], "portfolio": {"health": "ok"}},
+        ), patch.object(ds_scanner, "generate_report_v2", return_value=""), patch(
+            "builtins.print"
+        ) as printed:
+            ds_scanner.main()
+
+        self.assertEqual(refresh.call_args.kwargs["manual_base_scores"], manual)
+        self.assertEqual(refresh.call_args.kwargs["index_change"], 0)
+        self.assertEqual(
+            scan.call_args.kwargs["effective_scoring_base_scores"], {"证券": 4}
+        )
+        output = " ".join(str(call) for call in printed.call_args_list)
+        self.assertIn("校验失败", output)
+        self.assertIn("拒绝沿用", output)
+
+    def test_zero_effective_base_is_not_replaced_by_pool_base(self):
+        days = [date.today() - timedelta(days=value) for value in range(30, 0, -1)]
+        history = pd.DataFrame(
+            {
+                "date": days,
+                "open": [1 + i * 0.001 for i in range(30)],
+                "high": [1.01 + i * 0.001 for i in range(30)],
+                "low": [0.99 + i * 0.001 for i in range(30)],
+                "close": [1 + i * 0.001 for i in range(30)],
+                "volume": [1000.0] * 30,
+            }
+        )
+        pool = {
+            "sh512880": {
+                "name": "证券ETF",
+                "category": "证券",
+                "policy": 20,
+                "_breakdown": {"base": 12},
+            }
+        }
+        realtime = {
+            "sh512880": {
+                "price": 1.03,
+                "last_close": history.iloc[-1]["close"],
+                "change_pct": 1.2,
+                "volume": 1500,
+            }
+        }
+        with patch.object(ds_scanner, "fetch_sina_history", return_value=history), patch.object(
+            ds_scanner, "calc_volume_time_factor", return_value=2
+        ):
+            row = ds_scanner.scan_etf_pool(
+                pool,
+                set(),
+                realtime,
+                {"证券": 0},
+                index_change=0,
+            )[0]
+
+        self.assertEqual(row["base_score"], 0)
+        self.assertEqual(row["score"]["policy_catalyst"], 0)
 
 
 def split_history(bars=30, break_at=15, pre=1.75, post=1.16, slope=0.005):

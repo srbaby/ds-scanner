@@ -11,15 +11,40 @@ import time
 
 if __package__ in {None, ""}:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    from automation.policy_research import common
     from automation.policy_research.collect_policy_news import collect_all
     from automation.policy_research.extract_policy_events import run_extract
     from automation.policy_research.score_policy_delta import run_score
-    from automation.policy_research.compare_policy_decision import run_compare
+    from automation.policy_research.compare_policy_decision import (
+        PollutedEtfPoolError,
+        run_compare,
+    )
 else:
+    from . import common
     from .collect_policy_news import collect_all
     from .extract_policy_events import run_extract
     from .score_policy_delta import run_score
-    from .compare_policy_decision import run_compare
+    from .compare_policy_decision import PollutedEtfPoolError, run_compare
+
+
+POLICY_STATUS_FILE = common.SNAPSHOT_DIR / "policy_observation_status.json"
+
+
+def _write_github_output(name: str, value: str) -> None:
+    output_file = os.environ.get("GITHUB_OUTPUT")
+    if not output_file:
+        return
+    with open(output_file, "a", encoding="utf-8") as f:
+        f.write(f"{name}={value}\n")
+
+
+def _write_observation_status(status: str, message: str = "", delta_as_of: str = "") -> None:
+    payload = {"status": status, "updated_at": common.now_str()}
+    if message:
+        payload["message"] = message
+    if delta_as_of:
+        payload["delta_as_of"] = delta_as_of
+    common.save_json(POLICY_STATUS_FILE, payload)
 
 
 def main() -> int:
@@ -28,7 +53,29 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=7)
     parser.add_argument("--score-days", type=int, default=90)
     parser.add_argument("--no-ai", action="store_true", help="强制走关键词兜底，不调 AI")
+    parser.add_argument(
+        "--compare-only",
+        action="store_true",
+        help="主扫描器刷新 ETF 池后，只重新生成政策影响观察，不重复采集/评分",
+    )
     args = parser.parse_args()
+
+    _write_github_output("compare_deferred", "false")
+    _write_github_output("all_sources_failed", "false")
+    _write_observation_status("running", "本次政策影响观察尚未完成")
+
+    if args.compare_only:
+        try:
+            compare = run_compare()
+        except Exception as exc:
+            _write_observation_status("failed", f"扫描后政策观察补生成失败: {exc}")
+            raise
+        _write_observation_status("ready", delta_as_of=compare.get("delta_as_of", ""))
+        print(
+            f"compare-only: {compare['impact']['operation_changes']} changes, "
+            f"aggression {compare['impact']['aggression_index']:+.2f}"
+        )
+        return 0
 
     all_sources_failed = False
     timings = {"collect": 0.0, "ai_pass1": 0.0, "body_fetch": 0.0, "ai_pass2": 0.0,
@@ -38,6 +85,7 @@ def main() -> int:
         collect = collect_all()
         timings["collect"] = time.perf_counter() - started
         all_sources_failed = bool(collect.get("all_sources_failed"))
+        _write_github_output("all_sources_failed", str(all_sources_failed).lower())
         print(
             f"collect: {collect['collected_count']} new, "
             f"{collect['error_count']}/{collect['source_total']} errors"
@@ -76,13 +124,21 @@ def main() -> int:
     active = sum(1 for row in score["themes"].values() if row.get("active_delta"))
     print(f"score: {active} active theme deltas")
     started = time.perf_counter()
-    compare = run_compare()
+    try:
+        compare = run_compare()
+    except PollutedEtfPoolError as exc:
+        _write_observation_status("deferred", str(exc))
+        _write_github_output("compare_deferred", "true")
+        print(f"⚠️ 政策影响观察延期：{exc}")
+        print("ℹ️ 主扫描器将先用人工 base 刷新 ETF 池，随后只补生成本次政策观察")
+        return 1 if all_sources_failed else 0
+    except Exception as exc:
+        _write_observation_status("failed", f"政策影响观察失败: {exc}")
+        raise
     timings["compare"] = time.perf_counter() - started
     print(f"timing: compare={timings['compare']:.3f}s")
     print(f"compare: {compare['impact']['operation_changes']} changes, aggression {compare['impact']['aggression_index']:+.2f}")
-    # 这步在 scan.yml 里是 continue-on-error，非零退出不会拦下扫描，也不会让 Actions 变红。
-    # 报警靠的是 Bark（扫描器读 source_health 后判 not ok）；这个退出码是给本地跑
-    # 和将来去掉 continue-on-error 用的，别指望它自己会喊。
+    _write_observation_status("ready", delta_as_of=compare.get("delta_as_of", ""))
     return 1 if all_sources_failed else 0
 
 

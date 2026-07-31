@@ -62,8 +62,26 @@ AI_PROVIDER = os.environ.get("AI_PROVIDER", "none").strip().lower()
 
 
 def load_policy_research() -> dict:
+    status_path = os.path.join(
+        "data", "policy_research", "snapshots", "policy_observation_status.json"
+    )
+    if os.path.exists(status_path):
+        try:
+            with open(status_path, "r", encoding="utf-8") as f:
+                status = json.load(f)
+            if status.get("status") != "ready":
+                return {
+                    "enabled": True,
+                    "ok": False,
+                    "error": status.get("message") or "本次政策影响观察尚未生成",
+                }
+        except Exception as exc:
+            return {"enabled": True, "ok": False, "error": f"政策观察状态读取失败: {exc}"}
+
     path = os.path.join("data", "policy_research", "snapshots", "policy_watchlist.json")
     if not os.path.exists(path):
+        if os.path.exists(status_path):
+            return {"enabled": True, "ok": False, "error": "本次政策影响观察文件尚未生成"}
         path = os.path.join("data", "policy_research", "snapshots", "last_decision_compare.json")
     if not os.path.exists(path):
         return {"enabled": True, "ok": False, "error": "policy_watchlist.json 尚未生成"}

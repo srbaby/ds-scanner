@@ -62,6 +62,7 @@ jobs:
       # 这步依然 continue-on-error：政策挂了扫描照跑，只是退回纯手工 base 分，
       # 并在 report 的"政策事件调整"段里写明未生效。
       - name: 运行政策事件研判（产出 base 分调整，喂给扫描器）
+        id: policy_research
         run: python automation/policy_research/run_policy_research.py
         env:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
@@ -79,6 +80,17 @@ jobs:
         env:
           DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+
+      # compare 发现旧污染池时必须先让主扫描器用真实行情刷新；这里仅补生成
+      # 当前政策观察，不修改已经完成的权威 decision，也不重新喂评分链路。
+      - name: 刷新 ETF 池后补生成政策观察
+        if: steps.policy_research.outputs.compare_deferred == 'true' && steps.policy_research.outputs.all_sources_failed != 'true'
+        run: python automation/policy_research/run_policy_research.py --compare-only
+        env:
+          DS_SCANNER_GIST_ID: ${{ secrets.DS_SCANNER_GIST_ID }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+        continue-on-error: true
+
       - name: 写入扫描器看板（不调用AI）
         run: python automation/generate_dashboard.py
         env:

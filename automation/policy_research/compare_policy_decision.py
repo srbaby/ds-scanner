@@ -36,6 +36,10 @@ def load_latest_delta() -> Dict:
     return common.load_json(candidates[-1], {}) if candidates else {}
 
 
+class PollutedEtfPoolError(RuntimeError):
+    """The observation baseline is unsafe; let the scanner refresh it first."""
+
+
 def adjusted_base_scores(base_scores: Dict, delta_report: Dict) -> Dict:
     adjusted = {}
     themes = delta_report.get("themes") or {}
@@ -315,7 +319,7 @@ def run_compare() -> Dict:
     pool_issues = ds_scanner.validate_etf_pool_bases(etf_pool, base_scores)
     if pool_issues:
         details = "\n".join(f"- {issue}" for issue in pool_issues)
-        raise RuntimeError(
+        raise PollutedEtfPoolError(
             "etf_pool 基础分校验失败，拒绝执行政策对比；"
             "不反推、不修补旧池，等待主扫描器用人工 base 重刷：\n"
             f"{details}"
@@ -407,7 +411,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
 
 
 

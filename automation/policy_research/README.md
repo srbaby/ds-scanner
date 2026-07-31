@@ -1,218 +1,130 @@
-# AI 政策基础分研究备忘
+# 政策事件流水线
 
-> 状态：研究旁路，不接入真实交易，不覆盖 `data/etf_base_config.json`。
+> **状态：生产链路。** 本流水线在每日扫描器之前运行，产出的政策事件
+> `active_delta` 会叠加到主题 `base_score`，并进入四维评分的政策催化位。
 >
-> 当前生产规则：扫描器继续读取人工基准分；政策/新闻系统只生成旁路 delta、激进度报告和月度慢调建议。
->
-> （2026-07-10 从根目录 `AI-Policy-Score-Research.md` 迁移至此，与实现代码同目录，避免设计文档和代码分家。）
+> 交易规则与作用边界以 `X-Plan.md` 模块 11 为唯一出处；系统位置、环境变量和
+> Gist 契约见 `docs/02-系统架构.md`；反直觉实现与失败约束见
+> `docs/03-实现约束.md`。
 
-## 研究目标
+## 一、职责与边界
 
-政策基础分（0-15）不再依赖一次性 AI 脑拍，而改为无人值守的政策事件系统：
+本组件负责：
 
-```text
-当日有效政策分 = 结构性 base + 自动政策事件 active_delta
-```
+1. 从 `data/policy_research/sources.json` 的白名单源采集政策与行业信息。
+2. 用 DeepSeek 两趟归类筛选实质事件；不可用时整体退回关键词兜底。
+3. 生成按主题聚合、自动衰减的 `active_delta`。
+4. 将最新结果写入 `data/policy_research/snapshots/last_delta.json`，供
+   `automation/ds_scanner.py` 在当日扫描前读取。
+5. 生成政策影响对比与可穿透证据，供报告、Bark 和看板展示。
 
-- `base`：长期政策地位，来自现有 `data/etf_base_config.json`，只允许月度慢调建议。
-- `active_delta`：政策/新闻事件触发的临时偏移，自动衰减，合计封顶 -2 到 +2。
-- 系统无人工复核环节；用机器激进度闸门替代人工确认。
+本组件不负责：
 
-## 文件布局
+- 不覆盖 `data/etf_base_config.json` 的人工结构性基础分。
+- 不修改扫描器产出的评分、信号或操作。
+- 不让政策事件影响持仓逻辑 `policy` 总分或硬条件。
+- 不把政策对比结果当成第二套权威决策。
 
-```text
-automation/policy_research/
-  collect_policy_news.py        # 白名单采集
-  extract_policy_events.py      # 事件提炼，不直接打分
-  score_policy_delta.py         # 规则评分、衰减、月度慢调建议
-  compare_policy_decision.py    # 与原规则对比，量化激进度
-  run_policy_research.py        # 总入口
-
-data/policy_research/
-  sources.json                  # 采集源白名单
-  theme_keywords.json           # 主题映射与关键词
-  raw/YYYY-MM.jsonl             # 原始采集项
-  events/YYYY-MM.jsonl          # 结构化政策事件
-  deltas/YYYY-MM-DD.json        # 当日 policy delta
-  reports/YYYY-MM-DD-*.md       # 研究报告
-  snapshots/                    # 最近一次运行快照
-```
-
-正式文件不动：
+## 二、固定执行顺序
 
 ```text
-automation/ds_scanner.py
-data/etf_base_config.json
-data/etf_pool.json
+白名单采集
+  → 粗筛
+  → DeepSeek 第一趟选读
+  → 抓取选中条目的正文
+  → DeepSeek 第二趟判主题与方向
+  → 事件提炼与去重
+  → delta 评分和衰减
+  → 政策影响对比
+  → 主扫描器读取 last_delta.json
 ```
 
-## 数据采集范围
+DeepSeek 两趟之间的先后关系不可并行或颠倒：第二趟必须使用第一趟选中的条目及其正文。
+AI 未配置、调用失败或结果不可用时，整批归类显式退回关键词兜底，不混合两种判定口径。
 
-不采全网，只采白名单。
+## 三、有界并发与确定性
 
-### S 级：直接政策源
+政策源采集和正文抓取是网络 I/O，可使用有界线程并发：
 
-中国政府网、国务院/部委政策库、发改委、工信部、财政部、央行、证监会等。S 级来源可以直接参与 `active_delta`。
+| 环境变量 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `POLICY_HTTP_CONCURRENCY` | `8` | 全局 HTTP 工作线程上限 |
+| `POLICY_HTTP_PER_DOMAIN_CONCURRENCY` | `2` | 同一注册域名的并发请求上限 |
 
-### A 级：主管机构与海外政策源
+两个值都必须是正整数，非法值会显式报错。域名上限用于避免对同一政务站点集中施压，
+全局上限用于限制线程和连接资源。
 
-交易所、国家能源局、商务部、科技部、国家数据局，美国白宫、BIS、USTR、OFAC、欧盟委员会等。A 级来源可以影响受海外政策冲击明显的主题，例如半导体、AI算力、稀土、港股科技、出口链、国防安全。
+工作线程只做请求与解析，不写文件。主线程按以下固定顺序合并：
 
-### B 级：权威新闻确认
+- 源采集结果按 `sources.json` 顺序处理；
+- 正文按 DeepSeek 第一趟返回的 `chosen` 顺序组装；
+- 去重、错误归档、JSONL 和 snapshot 仅由主线程写入。
 
-新华社、证券时报、中证报、上证报、财联社、第一财经、路透、彭博等。B 级只能作为确认或补充；单条 B 级新闻不直接改分。
+因此，网络请求完成顺序变化不会改变落盘顺序或第二趟输入。
 
-### C 级：市场线索源
+## 四、输入与产物
 
-东方财富、同花顺、雪球、券商研报摘要、行业媒体。C 级只作为线索，第一阶段不参与自动 delta。
+### 手工维护输入
 
-## 新闻与政策怎么用
+| 文件 | 用途 |
+| --- | --- |
+| `data/policy_research/sources.json` | 政策与行业来源白名单 |
+| `data/policy_research/theme_keywords.json` | 关键词兜底与主题辅助映射 |
+| `data/etf_base_config.json` | 主题结构性基础分；本组件只读 |
 
-流程固定：
+### 运行产物
+
+| 路径 | 用途 |
+| --- | --- |
+| `data/policy_research/raw/YYYY-MM.jsonl` | 去重后的原始采集条目 |
+| `data/policy_research/events/YYYY-MM.jsonl` | 结构化政策事件 |
+| `data/policy_research/deltas/YYYY-MM-DD.json` | 当日主题 delta |
+| `data/policy_research/reports/YYYY-MM-DD-*.md` | 人读的政策影响报告 |
+| `data/policy_research/snapshots/last_collect.json` | 最近一次采集状态 |
+| `data/policy_research/snapshots/last_extract.json` | 最近一次归类与提炼状态 |
+| `data/policy_research/snapshots/last_delta.json` | 扫描器读取的最新政策输入 |
+| `data/policy_research/snapshots/last_decision_compare.json` | 政策影响对比 |
+
+GitHub Actions 中的事件与快照目录是一次性工作区，尚未持久化的限制记录在
+`docs/05-未实现项.md`。
+
+## 五、失败与可见性
+
+- 全部政策源采集失败时，流程返回非零退出码，并在产物中写入
+  `source_health.all_sources_failed`。
+- `scan.yml` 对政策步骤使用 `continue-on-error`，因此退出码本身不会阻止扫描；
+  扫描器会拒用不可信 delta，并由 Bark 显式报警。
+- 部分源失败会保留错误明细；采集到 0 条新内容或提炼出 0 个事件不自动视为故障。
+- AI 失败会在报告与 Bark 中标明关键词兜底，不能静默伪装成 AI 成功。
+- delta 缺失或过期时，扫描器回到人工结构性基础分继续运行。
+
+## 六、运行与验证
+
+完整运行：
+
+```bash
+python3 automation/policy_research/run_policy_research.py
+```
+
+常用选项：
+
+```bash
+python3 automation/policy_research/run_policy_research.py --skip-collect
+python3 automation/policy_research/run_policy_research.py --no-ai
+python3 automation/policy_research/run_policy_research.py --days 7 --score-days 90
+```
+
+完整入口会输出六段耗时：
 
 ```text
-采集 -> 去重 -> 主题映射 -> 事件提炼 -> 规则评分 -> 自动衰减 -> 决策影响对比
+collect / AI 第一趟 / 正文抓取 / AI 第二趟 / score / compare
 ```
 
-HTTP 采集与 AI 选读后的正文抓取使用有界并发：默认全局最多 8 个工作线程、同一注册域名最多 2 个请求。
-可通过 `POLICY_HTTP_CONCURRENCY` 和 `POLICY_HTTP_PER_DOMAIN_CONCURRENCY` 调整；DeepSeek 两趟调用仍按
-“第一趟 -> 正文抓取 -> 第二趟”顺序执行。工作线程只负责请求和解析，结果由主线程按源配置顺序、`chosen` 顺序
-合并并落盘，避免完成顺序影响产物。
+回归测试与语法检查：
 
-结构化事件契约：
-
-```json
-{
-  "event_id": "...",
-  "published_at": "2026-07-10",
-  "title": "...",
-  "themes": ["半导体", "AI算力"],
-  "direction": "positive",
-  "policy_action": "funding_or_tax",
-  "evidence_strength": 4,
-  "confidence": "high",
-  "decay_mode": "national_60d",
-  "half_life_days": 20,
-  "expires_at": "2026-09-08",
-  "sources": [
-    {"source": "工信部", "source_rank": "S", "url": "https://...", "title": "..."}
-  ]
-}
+```bash
+python3 -m unittest automation.policy_research.test_policy_research
+python3 -m compileall -q automation
 ```
 
-去重规则：
-
-- 同 URL 直接去重。
-- 标题高相似且主题/方向相同，合并为一个事件。
-- 同一政策被媒体转载，保留最高等级来源，其他来源进入 `sources`。
-- 同一主题同方向事件可以累计证据，但 `active_delta` 封顶。
-
-## Delta 规则
-
-```text
-S级官方 + 强政策动作：±2
-S/A级官方 + 明确方向：±1
-B级新闻 + 至少两个独立来源确认：±1观察
-C级市场线索：0，只记录
-```
-
-强政策动作包括：财政补贴、税收优惠、政府采购、重大工程、准入标准、出口管制、制裁、关税、明确限制、去产能、强监管。
-
-每日限制：
-
-```text
-单事件最大 ±2
-同主题 active_delta 合计封顶 ±2
-最终 effective_base 限制在 0-15
-```
-
-## 自动消退与回归
-
-没有政策/新闻时，分数回归结构性 base，不能无限累计。
-
-```text
-普通新闻/市场解读：3-7日内失效
-部委/监管/交易所政策：10日半衰，20日失效或降权
-国家级/重大海外政策：20日半衰，60日失效或降权
-明确负面限制：保留到到期或出现反向事件，但仍不永久写 base
-```
-
-月度慢调 base：
-
-```text
-过去30天主题净政策事件分 >= +6 -> 建议 base +1
-过去30天主题净政策事件分 <= -6 -> 建议 base -1
-单月最多 ±1
-连续同方向才允许后续继续调整
-```
-
-第一阶段只生成建议，不自动写 `etf_base_config.json`。
-
-## 无人值守激进度闸门
-
-不设人工复核，用机器闸门：
-
-```text
-新增 BUY/ADD 过多 -> delta 降权或只进报告
-新增 RISK_STOP -> 负向 delta 不参与真实止损，只参与评分降级
-aggression_index > 7 -> 过激，只报告不执行旁路裁决
-```
-
-第一阶段政策 delta 只影响四维评分中的政策催化，不允许直接改 `policy < 15` 逻辑止损。
-
-## 验证方案
-
-每天同时保存两套结果：
-
-```text
-baseline：当前人工 base
-policy_shadow：人工 base + active_delta
-```
-
-量化指标：
-
-```text
-score_delta_total
-signal_grade 升级/降级次数
-operation_changes
-new_buy_count
-new_add_count
-new_sell_count
-new_risk_stop_count
-target_position_delta_pct
-aggression_index
-```
-
-激进度指数：
-
-```text
-aggression_index =
-  新增BUY * 3
-+ 新增ADD * 2
-+ 信号升级次数 * 1
-+ 目标仓位增加百分比 / 5
-- 新增SELL * 2
-- 新增RISK_STOP * 4
-```
-
-分档：
-
-```text
--4以下：过度防守
--3到+3：可接受
-+4到+7：偏激进，可观察
-+8以上：过激，自动降权或只进报告
-```
-
-事后验证：
-
-```text
-政策事件触发后 3/5/10/21 个交易日：
-- 主题 ETF 是否跑赢沪深300
-- 因政策 delta 升级的 BUY/ADD 是否贡献正收益
-- 因政策 delta 降级的主题是否避免回撤
-```
-
-## 安全底线
-
-政策研究系统不可成为每日扫描单点故障。采集失败、事件为空、评分失败、输出异常时，生产系统继续使用当前 `data/etf_base_config.json`。
+提交前仍须执行 `docs/04-开发纪律.md` 规定的完整门禁。

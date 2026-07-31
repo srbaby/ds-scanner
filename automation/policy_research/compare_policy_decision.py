@@ -375,7 +375,7 @@ def render_report(report: Dict) -> None:
         lines.append("无活跃政策 delta。")
     lines.extend(["", "## 操作差异", ""])
     if impact["diffs"]:
-        lines.extend(["| 标的 | 名称 | 原规则 | 政策旁路 |", "| --- | --- | --- | --- |"])
+        lines.extend(["| 标的 | 名称 | 人工基础分基线 | 事件调整后 |", "| --- | --- | --- | --- |"])
         for row in impact["diffs"]:
             lines.append(f"| {row['symbol']} | {row['name']} | {row['baseline']} | {row['policy_shadow']} |")
     else:
@@ -394,7 +394,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
 
 
 

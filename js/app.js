@@ -1038,16 +1038,16 @@ function renderPolicyWatch(data) {
   if (!data || data.enabled === false) {
     panel.hidden = true;
     body.innerHTML = '';
-    meta.textContent = '等待政策旁路数据';
+    meta.textContent = '等待政策影响数据';
     badge.textContent = '—';
     return;
   }
 
   panel.hidden = false;
   if (data.ok === false) {
-    meta.textContent = data.error || '政策旁路观察暂不可用';
+    meta.textContent = data.error || '政策影响观察暂不可用';
     badge.textContent = '未生成';
-    body.innerHTML = '<div class="policy-watch-empty">等待下一次扫描生成政策旁路观察。</div>';
+    body.innerHTML = '<div class="policy-watch-empty">等待下一次扫描生成政策影响观察。</div>';
     return;
   }
 

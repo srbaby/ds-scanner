@@ -76,7 +76,7 @@ def load_policy_research() -> dict:
         data["ok"] = True
         return data
     except Exception as exc:
-        return {"enabled": True, "ok": False, "error": f"政策旁路观察读取失败: {exc}"}
+        return {"enabled": True, "ok": False, "error": f"政策影响观察读取失败: {exc}"}
 
 
 def call_ai_audit(report_text: str, decision: dict) -> tuple:

@@ -190,12 +190,14 @@ def existing_ids(path) -> set:
     return {row.get("event_id") for row in common.read_jsonl(path) if row.get("event_id")}
 
 
-def run_extract(days: int = 7, use_ai: bool = True) -> Dict:
+def run_extract(days: int = 7, use_ai: bool = True, timings: Dict | None = None) -> Dict:
     raw_rows = common.read_recent_jsonl(common.RAW_DIR, days)
     config = load_theme_config()
     ai = {"ok": False, "reason": "未启用", "verdicts": {}, "stats": {}}
+    if timings is not None:
+        timings.update({"ai_pass1": 0.0, "body_fetch": 0.0, "ai_pass2": 0.0})
     if use_ai:
-        ai = ai_classify.classify(raw_rows, map_themes, config)
+        ai = ai_classify.classify(raw_rows, map_themes, config, timings=timings)
     events, skipped_no_date = extract_events(raw_rows, ai["verdicts"] if ai["ok"] else None)
     output_path = common.EVENT_DIR / f"{common.month_key()}.jsonl"
     seen = existing_ids(output_path)
@@ -236,4 +238,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

@@ -289,6 +289,11 @@ def fetch_excerpt(url: str, limit: int = EXCERPT_CHARS) -> str:
         return ""
 
 
+def _fetch_excerpt_job(item: Dict) -> str:
+    """Fetch one selected article; fetch_excerpt owns the existing empty-excerpt fallback."""
+    return fetch_excerpt(item.get("url", ""))
+
+
 def pass2_classify(items: List[Dict], sectors: List[str]) -> Dict:
     payload = {
         "sectors": sectors,
@@ -331,13 +336,15 @@ def pass2_classify(items: List[Dict], sectors: List[str]) -> Dict:
     return {"ok": True, "results": verdicts, "error": None}
 
 
-def classify(raw_rows: List[Dict], map_themes, config: Dict) -> Dict:
+def classify(raw_rows: List[Dict], map_themes, config: Dict, timings: Optional[Dict] = None) -> Dict:
     """完整两趟流程。
 
     返回 {"ok", "reason", "verdicts", "stats"}。ok=False 时 verdicts 为空，
     调用方必须退回关键词分类器并把 reason 显式写进报告——绝不静默降级。
     """
     stats = {"prefiltered": 0, "picked": 0, "fetched": 0, "classified": 0}
+    timings = timings if timings is not None else {}
+    timings.update({"ai_pass1": 0.0, "body_fetch": 0.0, "ai_pass2": 0.0})
     if not enabled():
         return {"ok": False, "reason": "未配置 DEEPSEEK_API_KEY", "verdicts": {}, "stats": stats}
 
@@ -347,7 +354,9 @@ def classify(raw_rows: List[Dict], map_themes, config: Dict) -> Dict:
     if not items:
         return {"ok": False, "reason": "粗筛后没有可送审条目", "verdicts": {}, "stats": stats}
 
+    started = time.perf_counter()
     picked = pass1_pick(items, sectors)
+    timings["ai_pass1"] = time.perf_counter() - started
     if not picked["ok"]:
         return {"ok": False, "reason": f"第一趟失败: {picked['error']}", "verdicts": {}, "stats": stats}
     chosen_ids = ensure_sector_floor(items, picked["read"])
@@ -357,11 +366,20 @@ def classify(raw_rows: List[Dict], map_themes, config: Dict) -> Dict:
     if not chosen:
         return {"ok": False, "reason": "第一趟没选出任何条目", "verdicts": {}, "stats": stats}
 
-    for item in chosen:
-        item["excerpt"] = fetch_excerpt(item.get("url", ""))
+    started = time.perf_counter()
+    jobs = [
+        (item.get("url", ""), lambda item=item: _fetch_excerpt_job(item))
+        for item in chosen
+    ]
+    excerpts = common.BoundedRequestExecutor().map(jobs)
+    for item, excerpt in zip(chosen, excerpts):
+        item["excerpt"] = excerpt
+    timings["body_fetch"] = time.perf_counter() - started
     stats["fetched"] = sum(1 for it in chosen if it.get("excerpt"))
 
+    started = time.perf_counter()
     judged = pass2_classify(chosen, sectors)
+    timings["ai_pass2"] = time.perf_counter() - started
     if not judged["ok"]:
         return {"ok": False, "reason": f"第二趟失败: {judged['error']}", "verdicts": {}, "stats": stats}
     stats["classified"] = len(judged["results"])

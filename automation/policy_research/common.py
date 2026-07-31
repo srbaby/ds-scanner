@@ -8,9 +8,12 @@ import hashlib
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from threading import Lock, Semaphore
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data" / "policy_research"
@@ -22,8 +25,91 @@ SNAPSHOT_DIR = DATA_DIR / "snapshots"
 SOURCES_FILE = DATA_DIR / "sources.json"
 THEMES_FILE = DATA_DIR / "theme_keywords.json"
 
+DEFAULT_HTTP_CONCURRENCY = 8
+DEFAULT_HTTP_PER_DOMAIN_CONCURRENCY = 2
+
 for path in (RAW_DIR, EVENT_DIR, DELTA_DIR, REPORT_DIR, SNAPSHOT_DIR):
     path.mkdir(parents=True, exist_ok=True)
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}")
+    return value
+
+
+def http_concurrency() -> int:
+    """Global number of concurrent policy HTTP fetch/parse workers."""
+    return _positive_env_int("POLICY_HTTP_CONCURRENCY", DEFAULT_HTTP_CONCURRENCY)
+
+
+def http_per_domain_concurrency() -> int:
+    """Maximum number of concurrent policy HTTP fetches per registrable domain."""
+    return _positive_env_int(
+        "POLICY_HTTP_PER_DOMAIN_CONCURRENCY",
+        DEFAULT_HTTP_PER_DOMAIN_CONCURRENCY,
+    )
+
+
+def request_domain(url: str) -> str:
+    """Group common subdomains without making unrelated government sites share a lock."""
+    hostname = (urlparse(url or "").hostname or "").lower().rstrip(".")
+    if not hostname:
+        return ""
+    labels = hostname.split(".")
+    if len(labels) >= 3 and ".".join(labels[-2:]) in {
+        "ac.uk",
+        "co.jp",
+        "co.uk",
+        "com.cn",
+        "edu.cn",
+        "gov.cn",
+        "net.cn",
+        "org.cn",
+    }:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:]) if len(labels) >= 2 else hostname
+
+
+class BoundedRequestExecutor:
+    """Run request/parse work with global and per-domain concurrency bounds.
+
+    The worker function is deliberately limited to network I/O and parsing. Callers
+    consume the returned values in input order so all output assembly and disk writes
+    stay in the main thread.
+    """
+
+    def __init__(self, max_workers: int | None = None, max_per_domain: int | None = None):
+        self.max_workers = max_workers or http_concurrency()
+        self.max_per_domain = max_per_domain or http_per_domain_concurrency()
+        self._domain_lock = Lock()
+        self._domain_semaphores: Dict[str, Semaphore] = {}
+
+    def _semaphore_for(self, url: str) -> Semaphore:
+        domain = request_domain(url)
+        with self._domain_lock:
+            semaphore = self._domain_semaphores.get(domain)
+            if semaphore is None:
+                semaphore = Semaphore(self.max_per_domain)
+                self._domain_semaphores[domain] = semaphore
+            return semaphore
+
+    def _run(self, url: str, work):
+        with self._semaphore_for(url):
+            return work()
+
+    def map(self, jobs):
+        """Return results in job order even when workers finish in another order."""
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = [executor.submit(self._run, url, work) for url, work in jobs]
+            return [future.result() for future in futures]
 
 
 def now_str() -> str:
@@ -152,4 +238,3 @@ def dedupe_rows(rows: Iterable[Dict[str, Any]], key: str) -> List[Dict[str, Any]
         seen.add(value)
         out.append(row)
     return out
-

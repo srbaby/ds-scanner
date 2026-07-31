@@ -186,6 +186,14 @@ def collect_source(source: Dict, keywords: Dict, timeout: int) -> List[Dict]:
     return extract_links(source, response.text, keywords)
 
 
+def _collect_source_job(source: Dict, keywords: Dict, timeout: int) -> Dict:
+    """Fetch and parse one source; no output assembly or disk I/O happens here."""
+    try:
+        return {"ok": True, "rows": collect_source(source, keywords, timeout), "error": None}
+    except Exception as exc:
+        return {"ok": False, "rows": [], "error": exc}
+
+
 def existing_ids(path) -> set:
     return {row.get("raw_id") for row in common.read_jsonl(path) if row.get("raw_id")}
 
@@ -203,12 +211,22 @@ def collect_all() -> Dict:
     source_total = 0
     per_source = {}
 
-    for source in config.get("sources") or []:
-        if not source.get("enabled", True):
-            continue
-        source_total += 1
-        try:
-            rows = collect_source(source, keywords, timeout)[:max_items]
+    sources = [source for source in config.get("sources") or [] if source.get("enabled", True)]
+    source_total = len(sources)
+    jobs = [
+        (
+            source.get("url", ""),
+            lambda source=source: _collect_source_job(source, keywords, timeout),
+        )
+        for source in sources
+    ]
+    results = common.BoundedRequestExecutor().map(jobs)
+
+    # Future results are consumed in sources.json order. Completion order is not
+    # allowed to change per_source/errors, raw JSONL order, or duplicate selection.
+    for source, result in zip(sources, results):
+        if result["ok"]:
+            rows = result["rows"][:max_items]
             # 抓到几条（去重前）才是这个源的真实产出。只看 error_count 看不出
             # "HTTP 200 但一条都没有"——JS 跳转壳页、域名白名单漏配子域、页面改版
             # 都是这个形态。2026-07-29 一查，5 个 rank-S 源里 4 个是哑的。
@@ -216,9 +234,9 @@ def collect_all() -> Dict:
             fresh = [row for row in rows if row["raw_id"] not in seen]
             seen.update(row["raw_id"] for row in fresh)
             collected.extend(fresh)
-        except Exception as exc:
-            per_source[source.get("id")] = {"name": source.get("name"), "rank": source.get("rank"), "matched": None}
-            errors.append({"source_id": source.get("id"), "source": source.get("name"), "error": str(exc)[:300]})
+            continue
+        per_source[source.get("id")] = {"name": source.get("name"), "rank": source.get("rank"), "matched": None}
+        errors.append({"source_id": source.get("id"), "source": source.get("name"), "error": str(result["error"])[:300]})
 
     written = common.append_jsonl(output_path, collected)
     snapshot = {

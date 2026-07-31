@@ -4,6 +4,8 @@
 import json
 import os
 import sys
+import threading
+import time
 import unittest
 from datetime import datetime, timedelta
 
@@ -12,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from bs4 import BeautifulSoup
 
 from policy_research import collect_policy_news as collect
+from policy_research import common
 from policy_research import extract_policy_events as extract
 from policy_research import score_policy_delta as score
 
@@ -600,9 +603,230 @@ class SourceHealthTests(unittest.TestCase):
             exit_code({"collected_count": 0, "error_count": 2, "source_total": 15, "all_sources_failed": False}), 0
         )
 
+    def test_timeout_source_does_not_hide_other_sources(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        sources = {
+            "sources": [
+                {"id": "slow", "name": "超时源", "rank": "A", "url": "https://slow.example/", "enabled": True},
+                {"id": "live", "name": "正常源", "rank": "S", "url": "https://live.example/", "enabled": True},
+            ]
+        }
+
+        def fake_collect(source, keywords, timeout):
+            if source["id"] == "slow":
+                raise TimeoutError("request timed out")
+            return [{"raw_id": "live-1", "title": "正常条目"}]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.dict(os.environ, {"POLICY_HTTP_CONCURRENCY": "2"}), \
+                 patch.object(collect.common, "SOURCES_FILE", root / "sources.json"), \
+                 patch.object(collect.common, "RAW_DIR", root), \
+                 patch.object(collect.common, "SNAPSHOT_DIR", root), \
+                 patch.object(collect.common, "ROOT", root), \
+                 patch.object(collect.common, "load_json", lambda path, default=None: sources if str(path).endswith("sources.json") else default), \
+                 patch.object(collect, "load_keywords", lambda: {}), \
+                 patch.object(collect, "collect_source", fake_collect):
+                snapshot = collect.collect_all()
+
+        self.assertEqual(snapshot["collected_count"], 1)
+        self.assertFalse(snapshot["all_sources_failed"])
+        self.assertEqual(snapshot["per_source"]["live"]["matched"], 1)
+        self.assertEqual(snapshot["per_source"]["slow"]["matched"], None)
+        self.assertEqual(snapshot["errors"][0]["source_id"], "slow")
+        self.assertIn("timed out", snapshot["errors"][0]["error"])
+
+    def test_all_sources_failed_is_recorded_by_collect(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        sources = {
+            "sources": [
+                {"id": "a", "name": "源A", "rank": "A", "url": "https://a.example/", "enabled": True},
+                {"id": "b", "name": "源B", "rank": "A", "url": "https://b.example/", "enabled": True},
+            ]
+        }
+
+        def fake_collect(source, keywords, timeout):
+            raise TimeoutError(f"{source['id']} timed out")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.object(collect.common, "SOURCES_FILE", root / "sources.json"), \
+                 patch.object(collect.common, "RAW_DIR", root), \
+                 patch.object(collect.common, "SNAPSHOT_DIR", root), \
+                 patch.object(collect.common, "ROOT", root), \
+                 patch.object(collect.common, "load_json", lambda path, default=None: sources if str(path).endswith("sources.json") else default), \
+                 patch.object(collect, "load_keywords", lambda: {}), \
+                 patch.object(collect, "collect_source", fake_collect):
+                snapshot = collect.collect_all()
+
+        self.assertTrue(snapshot["all_sources_failed"])
+        self.assertEqual(snapshot["error_count"], 2)
+        self.assertEqual([row["source_id"] for row in snapshot["errors"]], ["a", "b"])
+
+
+class ConcurrencyDeterminismTests(unittest.TestCase):
+    def test_collect_merges_in_config_order_and_dedupes_in_that_order(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        sources = {
+            "sources": [
+                {"id": "first", "name": "第一源", "rank": "A", "url": "https://one.example/", "enabled": True},
+                {"id": "second", "name": "第二源", "rank": "A", "url": "https://two.example/", "enabled": True},
+                {"id": "third", "name": "第三源", "rank": "A", "url": "https://three.example/", "enabled": True},
+            ]
+        }
+        delays = {"first": 0.03, "second": 0.001, "third": 0.015}
+
+        def fake_collect(source, keywords, timeout):
+            time.sleep(delays[source["id"]])
+            if source["id"] == "second":
+                return [{"raw_id": "duplicate", "title": "第二源重复条目"}]
+            if source["id"] == "first":
+                return [{"raw_id": "duplicate", "title": "第一源条目"}]
+            return [{"raw_id": "third-only", "title": "第三源条目"}]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.object(collect.common, "SOURCES_FILE", root / "sources.json"), \
+                 patch.object(collect.common, "RAW_DIR", root), \
+                 patch.object(collect.common, "SNAPSHOT_DIR", root), \
+                 patch.object(collect.common, "ROOT", root), \
+                 patch.object(collect.common, "load_json", lambda path, default=None: sources if str(path).endswith("sources.json") else default), \
+                 patch.object(collect, "load_keywords", lambda: {}), \
+                 patch.object(collect, "collect_source", fake_collect):
+                snapshot = collect.collect_all()
+                rows = common.read_jsonl(root / f"{common.month_key()}.jsonl")
+
+        self.assertEqual(list(snapshot["per_source"]), ["first", "second", "third"])
+        self.assertEqual([row["raw_id"] for row in rows], ["duplicate", "third-only"])
+        self.assertEqual(rows[0]["title"], "第一源条目")
+
+    def test_per_domain_limit_is_respected_and_can_be_configured(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        sources = {
+            "sources": [
+                {"id": f"same-{idx}", "name": f"同域{idx}", "rank": "A", "url": f"https://news.example/item-{idx}", "enabled": True}
+                for idx in range(6)
+            ]
+        }
+        lock = threading.Lock()
+        active = {"total": 0, "domain": 0, "max_total": 0, "max_domain": 0}
+
+        def fake_collect(source, keywords, timeout):
+            with lock:
+                active["total"] += 1
+                active["domain"] += 1
+                active["max_total"] = max(active["max_total"], active["total"])
+                active["max_domain"] = max(active["max_domain"], active["domain"])
+            time.sleep(0.01)
+            with lock:
+                active["total"] -= 1
+                active["domain"] -= 1
+            return [{"raw_id": source["id"], "title": source["id"]}]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with patch.dict(os.environ, {
+                "POLICY_HTTP_CONCURRENCY": "4",
+                "POLICY_HTTP_PER_DOMAIN_CONCURRENCY": "2",
+            }), \
+                 patch.object(collect.common, "SOURCES_FILE", root / "sources.json"), \
+                 patch.object(collect.common, "RAW_DIR", root), \
+                 patch.object(collect.common, "SNAPSHOT_DIR", root), \
+                 patch.object(collect.common, "ROOT", root), \
+                 patch.object(collect.common, "load_json", lambda path, default=None: sources if str(path).endswith("sources.json") else default), \
+                 patch.object(collect, "load_keywords", lambda: {}), \
+                 patch.object(collect, "collect_source", fake_collect):
+                collect.collect_all()
+
+        self.assertGreater(active["max_total"], 1)
+        self.assertLessEqual(active["max_total"], 4)
+        self.assertLessEqual(active["max_domain"], 2)
+
+    def test_body_failures_keep_titles_and_do_not_cross_wire_excerpts(self):
+        from unittest.mock import patch
+        from policy_research import ai_classify
+
+        rows = [
+            {"raw_id": "a", "source": "源", "source_rank": "S", "title": "事件A", "url": "https://a.example/a"},
+            {"raw_id": "b", "source": "源", "source_rank": "S", "title": "事件B", "url": "https://b.example/b"},
+        ]
+        order = []
+        captured = []
+
+        def fake_pass1(items, sectors):
+            order.append("pass1")
+            return {"ok": True, "read": ["b", "a"], "error": None}
+
+        def fake_fetch(url):
+            time.sleep(0.02 if url.endswith("/a") else 0.001)
+            return "" if url.endswith("/a") else "正文B"
+
+        def fake_pass2(items, sectors):
+            order.append("pass2")
+            captured.extend(items)
+            return {
+                "ok": True,
+                "results": {
+                    item["id"]: {"sector": "证券", "direction": "positive", "strength": 1, "duplicate_of": None}
+                    for item in items
+                },
+                "error": None,
+            }
+
+        with patch.object(ai_classify, "DEEPSEEK_API_KEY", "test-key"), \
+             patch.object(ai_classify, "etf_sectors", return_value=["证券"]), \
+             patch.object(ai_classify, "pass1_pick", fake_pass1), \
+             patch.object(ai_classify, "fetch_excerpt", fake_fetch), \
+             patch.object(ai_classify, "pass2_classify", fake_pass2):
+            got = ai_classify.classify(rows, lambda title, config: ["证券"], {})
+
+        by_id = {item["id"]: item for item in captured}
+        self.assertEqual(order[0], "pass1")
+        self.assertEqual(order[-1], "pass2")
+        self.assertEqual([item["id"] for item in captured], ["b", "a"])
+        self.assertEqual(by_id["a"]["excerpt"], "")
+        self.assertEqual(by_id["a"]["title"], "事件A")
+        self.assertEqual(by_id["b"]["excerpt"], "正文B")
+        self.assertEqual(got["stats"]["fetched"], 1)
+
+
+class PipelineStageTimingTests(unittest.TestCase):
+    def test_run_extract_keeps_timing_out_of_snapshot_contract(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from policy_research import extract_policy_events as extract_module
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            timings = {}
+            with patch.object(extract_module.common, "RAW_DIR", root), \
+                 patch.object(extract_module.common, "EVENT_DIR", root), \
+                 patch.object(extract_module.common, "SNAPSHOT_DIR", root), \
+                 patch.object(extract_module.common, "ROOT", root), \
+                 patch.object(extract_module, "load_theme_config", return_value={"themes": {}}), \
+                 patch.object(extract_module.common, "read_recent_jsonl", return_value=[]), \
+                 patch.object(extract_module.common, "append_jsonl", return_value=0), \
+                 patch.object(extract_module.common, "save_json"):
+                result = extract_module.run_extract(use_ai=False, timings=timings)
+
+        self.assertEqual(timings, {"ai_pass1": 0.0, "body_fetch": 0.0, "ai_pass2": 0.0})
+        self.assertNotIn("timings", result)
+
 
 if __name__ == "__main__":
     unittest.main()
-
-
 

@@ -58,6 +58,16 @@ class PolicyResearchTests(unittest.TestCase):
         }
         self.assertEqual(score.event_raw_delta(event), 2)
 
+    def test_event_direction_domain_keeps_negative_mixed_and_unknown_explicit(self):
+        base = {
+            "evidence_strength": 4,
+            "policy_action": "funding_or_tax",
+            "sources": [{"source_rank": "S"}],
+        }
+        self.assertEqual(score.event_raw_delta({**base, "direction": "negative"}), -2)
+        self.assertEqual(score.event_raw_delta({**base, "direction": "mixed"}), 0)
+        self.assertEqual(score.event_raw_delta({**base, "direction": "unexpected"}), 0)
+
     def test_event_decay_goes_to_zero_after_expiry(self):
         event = {
             "direction": "positive",
@@ -829,4 +839,3 @@ class PipelineStageTimingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

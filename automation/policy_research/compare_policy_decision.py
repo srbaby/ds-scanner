@@ -237,6 +237,8 @@ def build_policy_watchlist(base_rows: List[Dict], shadow_rows: List[Dict], holdi
     holdings_risk = []
     near_triggers = []
     near_downgrades = []
+    holdings_boost = []
+    pool_weakening = []
 
     for shadow in shadow_rows:
         symbol = str(shadow.get("symbol"))
@@ -254,9 +256,15 @@ def build_policy_watchlist(base_rows: List[Dict], shadow_rows: List[Dict], holdi
         elif symbol in holding_symbols and grade_rank(row["shadow_grade"]) < grade_rank(row["base_grade"]):
             row["priority"] = "持仓信号降级"
             near_downgrades.append(row)
+        elif symbol in holding_symbols and delta > 0:
+            row["priority"] = "持仓政策转强"
+            holdings_boost.append(row)
         elif symbol not in holding_symbols and delta > 0:
             row["priority"] = "政策正偏移接近触发" if row["shadow_action"] == "BUY" or row["shadow_grade"] in {"B", "A", "S"} or row["gap"]["score_to_b"] <= 6 else "政策正偏移观察"
             near_triggers.append(row)
+        elif symbol not in holding_symbols and delta < 0:
+            row["priority"] = "池内政策转弱"
+            pool_weakening.append(row)
 
     def sort_key(row: Dict):
         return (0 if row.get("shadow_action") in {"BUY", "ADD", "SELL", "REDUCE"} else 1, row.get("gap", {}).get("score_to_b", 99), -abs(row.get("policy_delta", 0)), -row.get("shadow_score", 0))
@@ -264,6 +272,8 @@ def build_policy_watchlist(base_rows: List[Dict], shadow_rows: List[Dict], holdi
     holdings_risk = sorted(holdings_risk, key=sort_key)[:5]
     near_triggers = sorted(near_triggers, key=sort_key)[:6]
     near_downgrades = sorted(near_downgrades, key=sort_key)[:5]
+    holdings_boost = sorted(holdings_boost, key=sort_key)[:5]
+    pool_weakening = sorted(pool_weakening, key=sort_key)[:5]
     # 每个生效主题都要能穿透查证：加减分的依据标题 + 原文链接 + 日期一并带出，
     # 否则看板上只有一个"证券 +1"的小徽章，凭什么加这一分无从核对。
     full_events = {theme: (row.get("policy_events") or []) for theme, row in (delta_report.get("themes") or {}).items()}
@@ -288,6 +298,8 @@ def build_policy_watchlist(base_rows: List[Dict], shadow_rows: List[Dict], holdi
             "holdings_risk_count": len(holdings_risk),
             "near_trigger_count": len(near_triggers),
             "near_downgrade_count": len(near_downgrades),
+            "holdings_boost_count": len(holdings_boost),
+            "pool_weakening_count": len(pool_weakening),
             "active_delta_count": len(active_policy_deltas),
             "aggression_index": impact.get("aggression_index", 0),
             "verdict": impact.get("verdict", "可接受"),
@@ -296,6 +308,8 @@ def build_policy_watchlist(base_rows: List[Dict], shadow_rows: List[Dict], holdi
         "holdings_risk": holdings_risk,
         "near_triggers": near_triggers,
         "near_downgrades": near_downgrades,
+        "holdings_boost": holdings_boost,
+        "pool_weakening": pool_weakening,
     }
 
 def compact_op(row: Dict) -> str:
@@ -411,6 +425,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
 
 

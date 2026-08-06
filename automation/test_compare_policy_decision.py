@@ -38,6 +38,53 @@ class ComparePoolValidationTests(unittest.TestCase):
         scan_market.assert_not_called()
 
 
+class PolicyWatchlistGroupingTests(unittest.TestCase):
+    @staticmethod
+    def row(symbol, theme, score=80, grade="B"):
+        return {
+            "symbol": symbol,
+            "full_symbol": symbol,
+            "name": symbol,
+            "category": theme,
+            "score": {"total": score},
+            "signal_grade": grade,
+            "price": 2.0,
+            "ma20": 1.0,
+            "ma20_deviation_pct": 0,
+            "vol_ratio": 1.5,
+            "fund_flow": "",
+        }
+
+    def test_positive_holdings_and_negative_pool_rows_are_grouped_and_capped(self):
+        boost_rows = [self.row(f"shboost{i}", "证券") for i in range(6)]
+        weakening_rows = [self.row(f"shweak{i}", "银行") for i in range(6)]
+        base_rows = boost_rows + weakening_rows
+        shadow_rows = [dict(row) for row in base_rows]
+        delta_report = {
+            "themes": {
+                "证券": {"active_delta": 1, "policy_events": []},
+                "银行": {"active_delta": -1, "policy_events": []},
+            }
+        }
+        holdings = [{"symbol": row["symbol"], "qty": 100} for row in boost_rows]
+
+        result = compare.build_policy_watchlist(
+            base_rows,
+            shadow_rows,
+            holdings,
+            delta_report,
+            {"operations": []},
+            {},
+        )
+
+        self.assertEqual(len(result["holdings_boost"]), 5)
+        self.assertEqual(len(result["pool_weakening"]), 5)
+        self.assertEqual(result["summary"]["holdings_boost_count"], 5)
+        self.assertEqual(result["summary"]["pool_weakening_count"], 5)
+        self.assertTrue(all(row["priority"] == "持仓政策转强" for row in result["holdings_boost"]))
+        self.assertTrue(all(row["priority"] == "池内政策转弱" for row in result["pool_weakening"]))
+
+
 class PolicyObservationRecoveryTests(unittest.TestCase):
     def test_compare_only_marks_observation_ready(self):
         report = {

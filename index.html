@@ -390,12 +390,14 @@
                 <div class="drawer-actions">
                     <button
                         class="btn btn-primary drawer-confirm-btn"
+                        id="new-confirm-btn"
                         data-action="add-holding"
                     >
                         确认买入
                     </button>
                     <button
                         class="btn btn-ghost drawer-cancel-btn"
+                        id="new-cancel-btn"
                         data-action="close-drawer"
                     >
                         取消
@@ -435,8 +437,8 @@
                 </div>
                 <div class="operation-preview" id="operation-preview"></div>
                 <div class="drawer-actions">
-                    <button type="button" class="btn btn-primary drawer-confirm-btn" data-action="confirm-operation">确认登记</button>
-                    <button type="button" class="btn btn-ghost drawer-cancel-btn" data-action="close-operation">取消</button>
+                    <button type="button" class="btn btn-primary drawer-confirm-btn" id="operation-confirm-btn" data-action="confirm-operation">确认登记</button>
+                    <button type="button" class="btn btn-ghost drawer-cancel-btn" id="operation-cancel-btn" data-action="close-operation">取消</button>
                 </div>
             </form>
         </dialog>
@@ -448,6 +450,6 @@
              这样 file:// 直接双击打开也能测试，不必起本地服务器。 -->
         <script src="js/api.js?v=20260719f"></script>
         <script src="js/decision.js?v=20260719f"></script>
-        <script src="js/app.js?v=20260719f"></script>
+        <script src="js/app.js?v=20260806c"></script>
     </body>
 </html>

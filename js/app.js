@@ -58,6 +58,12 @@ let etfPoolData = {};
 let activeView = 'execute';
 let currentAiActions = [];
 let operationSaveInFlight = false;
+// PATCH 成功但写后校验没跑完时置位。此时本地台账和远端是否一致无法确证，
+// 唯一安全的动作是刷新页面重新对齐，所以在刷新前锁住所有写入入口。
+// 必须锁：saveData() 成功时已经把 gistFileContents 同步成写入后的内容，
+// assertNoRemoteChange() 因此比对通过、拦不住重复提交，而本地状态按设计又没有回滚——
+// 再点一次确认就会在 append-only 台账里写出同一笔交易的第二条事件。
+let writeVerificationUnresolved = false;
 const editOpenState = new Set();
 // refreshScannerActions() 每次调用后写入这里，fillReasonSelect 读取它来判断三态
 // （已确认无信号 / 数据未刷新导致无法判断 / 正常匹配上），避免把"没刷新到"误报成"确认没有"。
@@ -183,6 +189,8 @@ async function loadData() {
 
 async function loadInsightData() {
   if (!gistClient) return;
+  // 洞察页刻意重新读取索引：setActiveView() 受 !statsData 守卫保护，每次页面加载
+  // 最多进入一次，但首次打开可能距离 loadData() 已经很久，不能复用旧快照。
   const gist = await gistClient.index();
   gistIndex = gist;
   const reportName = dashboardData?.report_file || 'report.txt';
@@ -227,7 +235,7 @@ async function refreshScannerActions() {
 // ============================================================
 // 写回 Gist
 // ============================================================
-async function saveData(extraFiles = {}, successMessage = '✅ 已保存') {
+async function saveData(extraFiles = {}) {
   setStatus('同步中…', '');
   try {
     const content = JSON.stringify(holdingsData, null, 2);
@@ -245,8 +253,9 @@ async function saveData(extraFiles = {}, successMessage = '✅ 已保存') {
     document.getElementById('display-sync').textContent =
       new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
     flashRefresh();
-    toast(successMessage, 'success');
-    return true;
+    // 成功提示由 persistExecution() 在写后校验通过后发出；PATCH 成功本身
+    // 只说明 GitHub 接收了请求，不能提前告诉用户台账已经落地。
+    return updated;
   } catch(e) {
     setStatus('同步失败', 'err');
     toast('❌ 未写入: ' + e.message, 'error');
@@ -400,23 +409,43 @@ async function assertNoRemoteChange(filenames) {
   if (changed) throw new Error(`${changed} 已被其他设备更新，请刷新后重试`);
 }
 
-async function verifyEventWritten(eventId) {
-  const gist = await gistClient.index();
-  gistRevision = gist.history?.[0]?.version || gistRevision;
-  const raw = await gistClient.readFile(gist, executionFileName()) || '';
+async function verifyEventWritten(eventId, patchedGist = null) {
+  const filename = executionFileName();
+  const patchedFile = patchedGist?.files?.[filename];
+  let gist = patchedGist;
+  let raw;
+
+  // PATCH 响应就是 GitHub 写入后的 Gist 快照。小文件直接用其中的 content
+  // 校验，避免再发 index + readFile；文件缺失或被标记 truncated 时必须回退到
+  // 重新读取，拿不到内容不能把校验当成通过。
+  if (patchedFile && patchedFile.truncated !== true && typeof patchedFile.content === 'string') {
+    gistRevision = patchedGist.history?.[0]?.version || gistRevision;
+    raw = patchedFile.content;
+  } else {
+    gist = await gistClient.index();
+    gistRevision = gist.history?.[0]?.version || gistRevision;
+    raw = await gistClient.readFile(gist, filename) || '';
+  }
   if (!parseGistJsonl(raw).some(row => row.event_id === eventId)) {
     throw new Error('写后校验未找到事件ID，请刷新确认');
   }
 }
 
 async function persistExecution(event, beforeData, afterData) {
+  if (writeVerificationUnresolved) {
+    toast('⚠️ 上一笔写后校验未完成，请先刷新页面确认台账，不要重复提交', 'warn');
+    return false;
+  }
   if (operationSaveInFlight) {
-    toast('正在写入，请勿重复提交', 'error');
+    // 交互层的 disabled 已经拦截重复点击；这里仅保留并发兜底，不再把
+    // 被拦截的重复操作显示成红色失败，避免用户误以为首笔写入失败。
     return false;
   }
   operationSaveInFlight = true;
   const previousEvents = deepClone(executionEvents);
   const previousManifest = deepClone(dataManifest);
+  let patchSucceeded = false;
+  let verificationSucceeded = false;
   try {
     await assertNoRemoteChange(['holdings.json', executionFileName()]);
     executionEvents = [...executionEvents, event];
@@ -429,12 +458,15 @@ async function persistExecution(event, beforeData, afterData) {
     }
     dataManifest.files[executionFileName()].content_bytes = eventBytes;
     dataManifest.files[executionFileName()].content_sha256 = await sha256Hex(eventContent);
-    const ok = await saveData({
+    const patchedGist = await saveData({
       [executionFileName()]: eventContent,
       'data_manifest.json': dataManifest,
-    }, '✅ 操作已登记');
-    if (!ok) throw new Error('Gist 保存失败');
-    await verifyEventWritten(event.event_id);
+    });
+    if (!patchedGist) throw new Error('Gist 保存失败');
+    patchSucceeded = true;
+    await verifyEventWritten(event.event_id, patchedGist);
+    verificationSucceeded = true;
+    toast('✅ 操作已登记', 'success');
     if (eventBytes >= 500000) {
       toast('⚠️ 事件文件已超过500KB，请安排数据库迁移', 'error');
     }
@@ -442,6 +474,16 @@ async function persistExecution(event, beforeData, afterData) {
     renderExecutionHistory();
     return true;
   } catch (e) {
+    if (patchSucceeded && !verificationSucceeded) {
+      // PATCH 已返回成功，远端很可能已经写入；此时回滚本地状态会诱导用户
+      // 再提交而产生重复事件。校验失败只报告不确定状态，要求用户刷新确认。
+      writeVerificationUnresolved = true;
+      renderAll();
+      renderExecutionHistory();
+      setStatus('已提交，校验未完成', 'warn');
+      toast('⚠️ 已提交，但写后校验未完成，请刷新确认且不要重复提交', 'warn');
+      return false;
+    }
     holdingsData = beforeData;
     executionEvents = previousEvents;
     dataManifest = previousManifest;
@@ -925,6 +967,7 @@ function toggleManualReason(selectId) {
     status.textContent = '人工补录已启用，本次记录不会进入方法论统计。';
   }
   if (manualButton) manualButton.textContent = '恢复扫描器匹配';
+  if (selectId === 'operation-reason') updateOperationDialogConfirmState();
 }
 
 function hasValidReason(selectId) {
@@ -1055,8 +1098,10 @@ function renderPolicyWatch(data) {
   const risk = data.holdings_risk || [];
   const triggers = data.near_triggers || [];
   const downgrades = data.near_downgrades || [];
+  const boosts = data.holdings_boost || [];
+  const weakenings = data.pool_weakening || [];
   const deltas = data.active_policy_deltas || [];
-  const totalWatch = risk.length + triggers.length + downgrades.length;
+  const totalWatch = risk.length + triggers.length + downgrades.length + boosts.length + weakenings.length;
   meta.textContent = data.generated_at || '随每日扫描更新';
   meta.title = data.updated_frequency || '';
   badge.textContent = totalWatch ? `${totalWatch}项关注` : '无触发';
@@ -1066,17 +1111,31 @@ function renderPolicyWatch(data) {
   sections.push(policyWatchRows('持仓风险', risk, 'risk'));
   sections.push(policyWatchRows('可能触发操作', triggers, 'trigger'));
   sections.push(policyWatchRows('持仓降级观察', downgrades, 'risk'));
+  sections.push(policyWatchRows('持仓政策转强', boosts, 'trigger'));
+  sections.push(policyWatchRows('池内政策转弱', weakenings, 'risk'));
+  if (deltas.length && !totalWatch) {
+    sections.push(`<div class="policy-watch-empty">${deltas.length} 个主题有政策偏移，均未落到池内标的。</div>`);
+  }
   if (deltas.length) {
     sections.push('<div class="policy-delta-list">' + deltas.map(row => policyDeltaEvidence(row)).join('') + '</div>');
   }
   body.innerHTML = sections.join('');
 }
 
+function policyDirectionLabel(direction) {
+  return {
+    positive: '正向',
+    negative: '负向',
+    mixed: '混合',
+  }[direction] || '方向未标注';
+}
+
 function policyDeltaEvidence(row) {
   // 每个生效主题都要能穿透查证：展开就是加减分的依据标题 + 原文链接 + 日期。
   // 只给一个"证券 +1"的徽章，凭什么加这一分无从核对。
   const cls = row.delta > 0 ? 'is-pos' : 'is-neg';
-  const chip = `<span class="policy-delta ${cls}">${escapeHtml(row.theme)} ${signedNumber(row.delta)}</span>`;
+  const themeDirection = row.delta > 0 ? 'positive' : row.delta < 0 ? 'negative' : '';
+  const chip = `<span class="policy-delta ${cls}">${escapeHtml(row.theme)} ${escapeHtml(policyDirectionLabel(themeDirection))} ${signedNumber(row.delta)}</span>`;
   const events = row.events || [];
   if (!events.length) return `<div class="policy-delta-item">${chip}</div>`;
   const items = events.map(ev => {
@@ -1089,7 +1148,7 @@ function policyDeltaEvidence(row) {
       ? `<a class="policy-ev-title" href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer">${title}</a>`
       : `<span class="policy-ev-title">${title}</span>`;
     return `<li class="policy-ev">${link}
-      <span class="policy-ev-meta">${escapeHtml(ev.source || '')} · ${escapeHtml(date)}${est ? ' ' : ''}${est} ${contrib}</span>
+      <span class="policy-ev-meta">${escapeHtml(policyDirectionLabel(ev.direction))} · ${escapeHtml(ev.source || '')} · ${escapeHtml(date)}${est ? ' ' : ''}${est} ${contrib}</span>
     </li>`;
   }).join('');
   return `<details class="policy-delta-item">
@@ -1703,7 +1762,6 @@ function applyBuyGuidance() {
 }
 
 async function openDrawer() {
-  await refreshScannerActions();
   checkStaleBanner();
   document.getElementById('new-symbol').value = '';
   delete document.getElementById('new-symbol').dataset.fullCode;
@@ -1711,12 +1769,59 @@ async function openDrawer() {
   document.getElementById('new-cost').value = '';
   document.getElementById('new-date').value = today();
   document.getElementById('new-cash').value = holdingsData.cash_available || '';
-  fillReasonSelect('new-reason', '', ['BUY', 'ADD']);
+  setBuyDrawerLoading(true);
   updateNewPreview();
   document.getElementById('suggest-list').classList.remove('open');
   document.getElementById('drawer-overlay').classList.add('open');
   document.getElementById('drawer').classList.add('open');
   setTimeout(() => document.getElementById('new-symbol').focus(), 300);
+  // 先展示抽屉和明确的刷新状态；网络慢时仍可取消，不能把买入入口锁在
+  // refreshScannerActions() 返回之后。
+  try {
+    await refreshScannerActions();
+  } catch (e) {
+    console.warn('刷新当日扫描器操作清单失败', e);
+    lastScanStatus = { ok: false, fresh: false, reason: 'network', generatedDate: '' };
+  }
+  try {
+    fillReasonSelect('new-reason', '', ['BUY', 'ADD']);
+  } finally {
+    setBuyDrawerLoading(false);
+  }
+}
+
+function setBuyDrawerLoading(loading) {
+  const select = document.getElementById('new-reason');
+  const status = document.getElementById('new-reason-status');
+  const confirm = document.getElementById('new-confirm-btn');
+  const cancel = document.getElementById('new-cancel-btn');
+  if (loading) {
+    if (select) {
+      select.disabled = true;
+      select.innerHTML = '<option value="">正在刷新今日扫描器清单，请稍候…</option>';
+    }
+    if (status) {
+      status.className = 'reason-status';
+      status.textContent = '正在刷新今日扫描器清单，请稍候…';
+    }
+  }
+  if (confirm) {
+    confirm.disabled = loading || writeVerificationUnresolved;
+    confirm.dataset.pending = 'false';
+    confirm.textContent = writeVerificationUnresolved ? '请刷新页面' : '确认买入';
+  }
+  if (cancel) cancel.disabled = false;
+}
+
+function setBuyDrawerPending(pending) {
+  const confirm = document.getElementById('new-confirm-btn');
+  const cancel = document.getElementById('new-cancel-btn');
+  if (confirm) {
+    confirm.dataset.pending = pending ? 'true' : 'false';
+    confirm.disabled = pending || writeVerificationUnresolved;
+    confirm.textContent = pending ? '正在登记…' : (writeVerificationUnresolved ? '请刷新页面' : '确认买入');
+  }
+  if (cancel) cancel.disabled = pending;
 }
 function closeDrawer() {
   document.getElementById('drawer-overlay').classList.remove('open');
@@ -1764,6 +1869,8 @@ function selectSuggest(code, name) {
 }
 
 async function addHolding() {
+  const confirmButton = document.getElementById('new-confirm-btn');
+  if (confirmButton?.disabled) return;
   const rawSym  = document.getElementById('new-symbol').value.trim();
   const qty     = parseInt(document.getElementById('new-qty').value);
   const cost    = parseFloat(document.getElementById('new-cost').value);
@@ -1810,26 +1917,31 @@ async function addHolding() {
     if (!confirm(`已有 ${symbol} 持仓，确认加仓？`)) return;
   }
 
-  const before = deepClone(holdingsData);
-  const after = deepClone(holdingsData);
-  const existingAfter = after.holdings.find(h => normalizeFullSymbol(h.symbol) === symbol && Number(h.qty) > 0);
-  const entry = {
-    symbol, qty, cost, buy_date: date,
-    wave_type: '', is_reduced: false,
-    _lot_id: makeClientLotId(symbol, date)
-  };
-  if (existingAfter) {
-    existingAfter.qty = Number(existingAfter.qty) + qty;
-    existingAfter.cost = cost;
-  } else {
-    after.holdings.push(entry);
+  setBuyDrawerPending(true);
+  try {
+    const before = deepClone(holdingsData);
+    const after = deepClone(holdingsData);
+    const existingAfter = after.holdings.find(h => normalizeFullSymbol(h.symbol) === symbol && Number(h.qty) > 0);
+    const entry = {
+      symbol, qty, cost, buy_date: date,
+      wave_type: '', is_reduced: false,
+      _lot_id: makeClientLotId(symbol, date)
+    };
+    if (existingAfter) {
+      existingAfter.qty = Number(existingAfter.qty) + qty;
+      existingAfter.cost = cost;
+    } else {
+      after.holdings.push(entry);
+    }
+    after.cash_available = cashAfter;
+    const eventType = existingAfter ? 'ADD' : 'BUY';
+    const reason = selectedReason('new-reason');
+    const event = buildExecutionEvent(eventType, symbol, before, after, reason);
+    editOpenState.clear();
+    if (await persistExecution(event, before, after)) closeDrawer();
+  } finally {
+    setBuyDrawerPending(false);
   }
-  after.cash_available = cashAfter;
-  const eventType = existingAfter ? 'ADD' : 'BUY';
-  const reason = selectedReason('new-reason');
-  const event = buildExecutionEvent(eventType, symbol, before, after, reason);
-  editOpenState.clear();
-  if (await persistExecution(event, before, after)) closeDrawer();
 }
 
 function updateNewPreview() {
@@ -1921,8 +2033,46 @@ async function saveCard(idx) {
   await persistExecution(event, before, after);
 }
 
+function setOperationDialogLoading() {
+  const select = document.getElementById('operation-reason');
+  const status = document.getElementById('operation-reason-status');
+  const confirm = document.getElementById('operation-confirm-btn');
+  const cancel = document.getElementById('operation-cancel-btn');
+  if (select) {
+    select.disabled = true;
+    select.innerHTML = '<option value="">正在刷新今日扫描器清单，请稍候…</option>';
+  }
+  if (status) {
+    status.className = 'reason-status';
+    status.textContent = '正在刷新今日扫描器清单，请稍候…';
+  }
+  if (confirm) {
+    confirm.disabled = true;
+    confirm.dataset.pending = 'false';
+    confirm.textContent = writeVerificationUnresolved ? '请刷新页面' : '确认登记';
+  }
+  if (cancel) cancel.disabled = false;
+}
+
+function updateOperationDialogConfirmState() {
+  const confirm = document.getElementById('operation-confirm-btn');
+  if (!confirm || confirm.dataset.pending === 'true') return;
+  confirm.disabled = writeVerificationUnresolved || !hasValidReason('operation-reason');
+}
+
+function setOperationDialogPending(pending) {
+  const confirm = document.getElementById('operation-confirm-btn');
+  const cancel = document.getElementById('operation-cancel-btn');
+  if (confirm) {
+    confirm.dataset.pending = pending ? 'true' : 'false';
+    confirm.disabled = pending || writeVerificationUnresolved;
+    confirm.textContent = pending ? '正在登记…' : (writeVerificationUnresolved ? '请刷新页面' : '确认登记');
+  }
+  if (cancel) cancel.disabled = pending;
+  if (!pending) updateOperationDialogConfirmState();
+}
+
 async function openOperationDialog(mode, idx, options = {}) {
-  await refreshScannerActions();
   checkStaleBanner();
   const dialog = document.getElementById('operation-dialog');
   const h = Number.isInteger(idx) && idx >= 0 ? holdingsData.holdings[idx] : null;
@@ -1939,10 +2089,20 @@ async function openOperationDialog(mode, idx, options = {}) {
   document.getElementById('operation-qty-wrap').style.display = mode === 'CORRECT_REASON' ? 'none' : 'block';
   document.getElementById('operation-cost-wrap').style.display = ['REDUCE', 'SELL', 'CORRECT_REASON'].includes(mode) ? 'none' : 'block';
   document.getElementById('operation-cash-wrap').style.display = mode === 'CORRECT_REASON' ? 'none' : 'block';
+  setOperationDialogLoading();
+  dialog.showModal();
+  // 先让用户看到弹窗和明确的加载态，再刷新扫描器清单；网络慢时仍可取消，
+  // 不能把打开操作入口锁在远端请求之后。
+  try {
+    await refreshScannerActions();
+  } catch (e) {
+    console.warn('刷新当日扫描器操作清单失败', e);
+    lastScanStatus = { ok: false, fresh: false, reason: 'network', generatedDate: '' };
+  }
   const symbol = h?.symbol || options.symbol || '';
   fillReasonSelect('operation-reason', symbol, options.reasonTypes || [mode], options.preferredRule || '');
   syncOperationModeFromReason();
-  dialog.showModal();
+  updateOperationDialogConfirmState();
 }
 
 function configureOperationDialog(mode, holding) {
@@ -2059,53 +2219,60 @@ function validateOperationInput(mode, currentQty, qtyAfter, costAfter) {
 }
 
 async function confirmOperationDialog() {
-  const mode = document.getElementById('operation-mode').value;
-  const idx = parseInt(document.getElementById('operation-index').value);
-  const targetEventId = document.getElementById('operation-event-id').value;
-  if (!hasValidReason('operation-reason')) {
-    toast('未匹配到当日扫描器操作；如属纠错或补历史，请先显式启用人工补录', 'error');
-    return;
-  }
-  const reason = selectedReason('operation-reason');
-  if (mode === 'CORRECT_REASON') {
-    const original = executionEvents.find(row => row.event_id === targetEventId);
-    if (!original) { toast('找不到原操作记录', 'error'); return; }
-    const before = deepClone(holdingsData);
-    const event = buildExecutionEvent('CORRECT_REASON', original.symbol, before, before, reason, {
-      target_event_id: targetEventId,
-      previous_rule_code: original.rule_code,
-      previous_reason_zh: original.reason_zh,
-    });
-    if (await persistExecution(event, before, before)) closeOperationDialog();
-    return;
-  }
+  const confirm = document.getElementById('operation-confirm-btn');
+  if (confirm?.disabled) return;
+  setOperationDialogPending(true);
+  try {
+    const mode = document.getElementById('operation-mode').value;
+    const idx = parseInt(document.getElementById('operation-index').value);
+    const targetEventId = document.getElementById('operation-event-id').value;
+    if (!hasValidReason('operation-reason')) {
+      toast('未匹配到当日扫描器操作；如属纠错或补历史，请先显式启用人工补录', 'error');
+      return;
+    }
+    const reason = selectedReason('operation-reason');
+    if (mode === 'CORRECT_REASON') {
+      const original = executionEvents.find(row => row.event_id === targetEventId);
+      if (!original) { toast('找不到原操作记录', 'error'); return; }
+      const before = deepClone(holdingsData);
+      const event = buildExecutionEvent('CORRECT_REASON', original.symbol, before, before, reason, {
+        target_event_id: targetEventId,
+        previous_rule_code: original.rule_code,
+        previous_reason_zh: original.reason_zh,
+      });
+      if (await persistExecution(event, before, before)) closeOperationDialog();
+      return;
+    }
 
-  const h = holdingsData.holdings[idx];
-  if (!h) { toast('持仓不存在，请刷新', 'error'); return; }
-  const qtyAfter = parseInt(document.getElementById('operation-qty').value);
-  const costAfter = parseFloat(document.getElementById('operation-cost').value);
-  const cashAfter = parseFloat(document.getElementById('operation-cash').value);
-  const operationError = validateOperationInput(mode, h.qty, qtyAfter, costAfter);
-  if (operationError) { toast(operationError, 'error'); return; }
-  if (!Number.isFinite(cashAfter) || cashAfter < 0) {
-    toast('操作后可用资金无效', 'error'); return;
+    const h = holdingsData.holdings[idx];
+    if (!h) { toast('持仓不存在，请刷新', 'error'); return; }
+    const qtyAfter = parseInt(document.getElementById('operation-qty').value);
+    const costAfter = parseFloat(document.getElementById('operation-cost').value);
+    const cashAfter = parseFloat(document.getElementById('operation-cash').value);
+    const operationError = validateOperationInput(mode, h.qty, qtyAfter, costAfter);
+    if (operationError) { toast(operationError, 'error'); return; }
+    if (!Number.isFinite(cashAfter) || cashAfter < 0) {
+      toast('操作后可用资金无效', 'error'); return;
+    }
+    const before = deepClone(holdingsData);
+    const after = deepClone(holdingsData);
+    const symbol = h.symbol;
+    if (mode === 'ADD') {
+      after.holdings[idx].qty = qtyAfter;
+      after.holdings[idx].cost = costAfter;
+    } else if (qtyAfter === 0) {
+      after.holdings.splice(idx, 1);
+    } else {
+      after.holdings[idx].qty = qtyAfter;
+      after.holdings[idx].is_reduced = true;
+    }
+    after.cash_available = cashAfter;
+    const event = buildExecutionEvent(mode, symbol, before, after, reason);
+    editOpenState.clear();
+    if (await persistExecution(event, before, after)) closeOperationDialog();
+  } finally {
+    setOperationDialogPending(false);
   }
-  const before = deepClone(holdingsData);
-  const after = deepClone(holdingsData);
-  const symbol = h.symbol;
-  if (mode === 'ADD') {
-    after.holdings[idx].qty = qtyAfter;
-    after.holdings[idx].cost = costAfter;
-  } else if (qtyAfter === 0) {
-    after.holdings.splice(idx, 1);
-  } else {
-    after.holdings[idx].qty = qtyAfter;
-    after.holdings[idx].is_reduced = true;
-  }
-  after.cash_available = cashAfter;
-  const event = buildExecutionEvent(mode, symbol, before, after, reason);
-  editOpenState.clear();
-  if (await persistExecution(event, before, after)) closeOperationDialog();
 }
 
 function eventDisplayState(event) {
@@ -2338,7 +2505,10 @@ function bindEvents() {
   });
   document.addEventListener('change', event => {
     if (event.target.dataset.input === 'new-reason') renderBuyGuidance();
-    if (event.target.dataset.input === 'operation-reason') syncOperationModeFromReason();
+    if (event.target.dataset.input === 'operation-reason') {
+      syncOperationModeFromReason();
+      updateOperationDialogConfirmState();
+    }
   });
   document.querySelector('#operation-dialog form')?.addEventListener('submit', event => {
     event.preventDefault();

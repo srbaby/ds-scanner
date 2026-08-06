@@ -212,6 +212,8 @@
   .topbar-status.ok::before { background: var(--accent); box-shadow: 0 0 6px rgba(96,165,250,0.6); animation: dot-breathe 2.4s ease-in-out infinite; }
   .topbar-status.err { color: var(--danger); }
   .topbar-status.err::before { background: var(--danger); box-shadow: 0 0 6px rgba(255,71,87,0.6); }
+  .topbar-status.warn { color: var(--warn); }
+  .topbar-status.warn::before { background: var(--warn); box-shadow: 0 0 6px rgba(251,191,36,0.55); }
   @keyframes dot-breathe {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.45; }
@@ -1155,6 +1157,7 @@
   }
   .toast.success { border-color: var(--dn); color: var(--dn); }
   .toast.error { border-color: var(--danger); color: var(--danger); }
+  .toast.warn { border-color: var(--warn); color: var(--warn); }
 
   /* ════════ 页面开太久提示条 ════════ */
   .stale-banner {

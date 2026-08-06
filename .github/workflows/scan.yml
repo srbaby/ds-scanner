@@ -20,23 +20,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: 'pip'
-          # ✨ 新增：让缓存插件去扫描你的脚本文件，完美适配你的无依赖文件架构
-          cache-dependency-path: |
-            automation/ds_scanner.py
-            automation/ai_review.py
-            automation/gemini_review.py
-            automation/generate_dashboard.py
-            automation/policy_research/collect_policy_news.py
-            automation/policy_research/extract_policy_events.py
-            automation/policy_research/score_policy_delta.py
-            automation/policy_research/compare_policy_decision.py
-            automation/policy_research/run_policy_research.py
-            automation/send_report.py
-            automation/versioning.py
-            VERSION.json
+          cache-dependency-path: requirements.txt
 
       - name: 安装Python依赖
-        run: pip install requests pandas akshare lxml beautifulsoup4
+        run: pip install -r requirements.txt
 
       - name: 运行回归测试（门禁：红了后面全不跑）
         run: |

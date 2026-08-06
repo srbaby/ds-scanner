@@ -23,13 +23,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: 'pip'
-          cache-dependency-path: |
-            automation/observe.py
-            automation/versioning.py
-            VERSION.json
+          cache-dependency-path: requirements-observe.txt
 
       - name: 安装Python依赖
-        run: pip install requests
+        run: pip install -r requirements-observe.txt
 
       - name: 运行在线观察任务
         run: |

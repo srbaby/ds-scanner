@@ -203,7 +203,7 @@
                             class="observer-confirm-btn"
                             id="observer-confirm-btn"
                             data-action="confirm-observation"
-                            title="当前持仓和资金已补录完成"
+                            title="持仓和可用资金已补录完成，确认后今日净值快照标记为高置信"
                         >
                             确认观察
                         </button>
@@ -272,7 +272,7 @@
                 <section class="recent-execution" id="recent-execution">
                     <div class="recent-execution-head">
                         <div>最近操作</div>
-                        <button data-action="switch-view" data-view="insights">查看全部</button>
+                        <button data-action="open-execution-history">查看全部</button>
                     </div>
                     <div id="recent-execution-list" class="recent-execution-list">暂无操作记录</div>
                 </section>
@@ -280,21 +280,18 @@
 
             <!-- 操作流水：放在页面内容最底部，避免挤占日常操作入口 -->
             <div class="max-w app-view" id="execution-history-view" hidden>
-                <section class="execution-panel">
-                    <div class="execution-head">
-                        <div>
-                            <div class="execution-title">操作记录</div>
-                            <div class="execution-meta" id="execution-meta">
-                                今日操作与最近更正会保留在 Gist
-                            </div>
-                        </div>
-                    </div>
+                <details class="info-section" id="execution-section">
+                    <summary>
+                        操作记录<span class="info-meta" id="execution-meta"
+                            >今日操作与最近更正会保留在 Gist</span
+                        >
+                    </summary>
                     <div id="execution-list" class="execution-list">
                         <div class="empty-state">
                             <div>暂无操作记录</div>
                         </div>
                     </div>
-                </section>
+                </details>
             </div>
 
             <!-- FAB -->

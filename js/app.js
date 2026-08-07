@@ -1300,10 +1300,9 @@ function renderObserver(data) {
   const quality = document.getElementById('observer-quality');
   if (!panel || !meta || !kpis || !chart || !legend || !progress || !quality) return;
 
+  renderObserverConfirmState(meta, data);
+
   if (!data) {
-    meta.textContent = observerRequestData?.requested_at
-      ? `已确认 ${observerRequestData.requested_at}`
-      : '等待线上观察任务';
     kpis.innerHTML = observerEmptyKpis();
     chart.innerHTML = '<div class="observer-chart-empty">暂无净值曲线</div>';
     legend.innerHTML = '';
@@ -1313,7 +1312,6 @@ function renderObserver(data) {
     return;
   }
 
-  meta.textContent = data.generated_at ? `更新 ${data.generated_at}` : '已生成';
   const summary = data.summary || {};
   kpis.innerHTML = [
     observerKpi('总收益', pctText(summary.total_return_pct), summary.total_return_pct),
@@ -1336,6 +1334,27 @@ function renderObserver(data) {
   const dq = data.data_quality || {};
   const notes = Array.isArray(dq.notes) && dq.notes.length ? ` · ${dq.notes.slice(0, 2).join(' / ')}` : '';
   quality.textContent = `成交 ${dq.trade_count || 0} · 低置信 ${dq.low_confidence_trade_count || 0} · 快照 ${dq.snapshot_count || 0}${notes}`;
+}
+
+// 「今日是否已确认」必须常驻：观察器只给当天已确认的快照标 high 置信，
+// 一旦 stats.json 存在就把状态挤掉，用户无从判断今天补录认没认。
+function renderObserverConfirmState(meta, data) {
+  const base = data
+    ? (data.generated_at ? `更新 ${data.generated_at}` : '已生成')
+    : '等待线上观察任务';
+  const confirmedAt = observerRequestData?.date === today()
+    ? String(observerRequestData.requested_at || '').split(' ')[1]?.slice(0, 5) || ''
+    : null;
+  meta.textContent = `${base} · ${confirmedAt === null ? '今日未确认' : `今日已确认 ${confirmedAt}`.trim()}`;
+
+  const btn = document.getElementById('observer-confirm-btn');
+  if (!btn) return;
+  const confirmed = confirmedAt !== null;
+  btn.classList.toggle('is-confirmed', confirmed);
+  btn.textContent = confirmed ? '重新确认' : '确认观察';
+  btn.title = confirmed
+    ? '持仓若又有改动，重新确认以更新今日高置信快照'
+    : '持仓和可用资金已补录完成，确认后今日净值快照标记为高置信';
 }
 
 function observerEmptyKpis() {
@@ -2451,6 +2470,16 @@ async function setActiveView(view) {
   }
 }
 
+// 「查看全部」要跨视图跳到默认折叠的操作记录，必须顺手展开并滚到位，
+// 否则用户点完只看到一片洞察内容，不知道记录在哪。
+async function openExecutionHistory() {
+  await setActiveView('insights');
+  const section = document.getElementById('execution-section');
+  if (!section) return;
+  section.open = true;
+  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function clearCredentials() {
   localStorage.removeItem('ds_token');
   localStorage.removeItem('ds_gist');
@@ -2481,6 +2510,7 @@ function bindEvents() {
     else if (action === 'open-drawer') openDrawer();
     else if (action === 'close-drawer') closeDrawer();
     else if (action === 'switch-view') setActiveView(view);
+    else if (action === 'open-execution-history') openExecutionHistory();
     else if (action === 'toggle-position') toggleEdit(Number(index));
     else if (action === 'save-position') saveCard(Number(index));
     else if (action === 'add-position') openAdd(Number(index));

@@ -455,29 +455,7 @@
     padding: 5px 8px;
   }
 
-  .execution-panel {
-    margin: 8px 12px 12px;
-    background: var(--bg2);
-    border: 1px solid var(--bd);
-    border-radius: 10px;
-    box-shadow: var(--inset-hl), var(--shadow-sm);
-    overflow: hidden;
-  }
-  .execution-head {
-    display: flex;
-    justify-content: space-between;
-    padding: 14px;
-    border-bottom: 1px solid var(--bd);
-  }
-  .execution-title {
-    font-size: 14px;
-    font-weight: 700;
-  }
-  .execution-meta {
-    color: var(--t2);
-    font-size: 11px;
-    margin-top: 4px;
-  }
+  /* 操作记录已并入 .info-section 折叠壳，面板/标题样式由折叠壳提供 */
   .execution-list {
     display: grid;
   }
@@ -1554,6 +1532,12 @@
     letter-spacing: 0.04em;
     padding: 8px 11px;
     transition: opacity 0.16s ease, transform 0.12s ease, background 0.16s ease;
+  }
+  /* 已确认退成低调描边，让「未确认」是页面上更显眼的那一个 */
+  .observer-confirm-btn.is-confirmed {
+    border-color: var(--bd);
+    background: transparent;
+    color: var(--t2);
   }
   .observer-confirm-btn:active { transform: scale(0.97); opacity: 0.85; }
   .observer-confirm-btn:disabled { opacity: 0.45; cursor: wait; }

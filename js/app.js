@@ -33,9 +33,6 @@ for (const [full, name] of Object.entries(ETF_POOL)) {
   CODE_MAP[full.slice(2)] = { full, name };
 }
 
-const OBSERVE_REPO = 'srbaby/ds-scanner';
-const OBSERVE_WORKFLOW = 'observe.yml';
-const OBSERVE_REF = 'main';
 const DEFAULT_VERSIONS = {
   methodology_version: 'v3.1',
   prompt_contract_version: 'v3.1',
@@ -45,7 +42,7 @@ const DEFAULT_VERSIONS = {
 // ============================================================
 // 状态
 // ============================================================
-let TOKEN = '', GIST_ID = '', holdingsData = {}, dashboardData = null, statsData = null, observerRequestData = null, gistETag = null;
+let TOKEN = '', GIST_ID = '', holdingsData = {}, dashboardData = null, statsData = null, gistETag = null;
 let versionData = { ...DEFAULT_VERSIONS };
 let executionEvents = [];
 let dataManifest = {};
@@ -194,9 +191,8 @@ async function loadInsightData() {
   const gist = await gistClient.index();
   gistIndex = gist;
   const reportName = dashboardData?.report_file || 'report.txt';
-  const files = await gistClient.readFiles(gist, ['stats.json', 'observer_request.json', reportName]);
+  const files = await gistClient.readFiles(gist, ['stats.json', reportName]);
   statsData = parseJson(files['stats.json'], null);
-  observerRequestData = parseJson(files['observer_request.json'], null);
   reportData = files[reportName] || dashboardData?.report || '';
   Object.assign(gistFileContents, files);
   renderDashboard(dashboardData);
@@ -1300,7 +1296,7 @@ function renderObserver(data) {
   const quality = document.getElementById('observer-quality');
   if (!panel || !meta || !kpis || !chart || !legend || !progress || !quality) return;
 
-  renderObserverConfirmState(meta, data);
+  meta.textContent = observerMetaText(data);
 
   if (!data) {
     kpis.innerHTML = observerEmptyKpis();
@@ -1336,25 +1332,9 @@ function renderObserver(data) {
   quality.textContent = `成交 ${dq.trade_count || 0} · 低置信 ${dq.low_confidence_trade_count || 0} · 快照 ${dq.snapshot_count || 0}${notes}`;
 }
 
-// 「今日是否已确认」必须常驻：观察器只给当天已确认的快照标 high 置信，
-// 一旦 stats.json 存在就把状态挤掉，用户无从判断今天补录认没认。
-function renderObserverConfirmState(meta, data) {
-  const base = data
-    ? (data.generated_at ? `更新 ${data.generated_at}` : '已生成')
-    : '等待线上观察任务';
-  const confirmedAt = observerRequestData?.date === today()
-    ? String(observerRequestData.requested_at || '').split(' ')[1]?.slice(0, 5) || ''
-    : null;
-  meta.textContent = `${base} · ${confirmedAt === null ? '今日未确认' : `今日已确认 ${confirmedAt}`.trim()}`;
-
-  const btn = document.getElementById('observer-confirm-btn');
-  if (!btn) return;
-  const confirmed = confirmedAt !== null;
-  btn.classList.toggle('is-confirmed', confirmed);
-  btn.textContent = confirmed ? '重新确认' : '确认观察';
-  btn.title = confirmed
-    ? '持仓若又有改动，重新确认以更新今日高置信快照'
-    : '持仓和可用资金已补录完成，确认后今日净值快照标记为高置信';
+function observerMetaText(data) {
+  if (!data) return '等待线上观察任务';
+  return data.generated_at ? `更新 ${data.generated_at}` : '已生成';
 }
 
 function observerEmptyKpis() {
@@ -1550,83 +1530,6 @@ function observerLineValue(lines, key, date) {
   return Number.isFinite(value) ? value : null;
 }
 
-async function confirmObservation() {
-  if (!TOKEN || !GIST_ID) return;
-  const btn = document.getElementById('observer-confirm-btn');
-  if (btn) btn.disabled = true;
-  setStatus('确认观察…', '');
-  try {
-    const canonical = canonicalHoldingsForObserve();
-    const request = {
-      requested_at: new Date().toLocaleString('sv-SE'),
-      date: today(),
-      source: 'frontend_confirm',
-      holdings_canonical: canonical,
-      holdings_hash: await sha256Short(JSON.stringify(canonical)),
-      note: '用户确认当前 holdings.json 已补录完成，可高置信观察',
-    };
-    const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `token ${TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ files: { 'observer_request.json': { content: JSON.stringify(request, null, 2) } } })
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    observerRequestData = request;
-    renderObserver(statsData);
-    const triggered = await triggerObserveWorkflow();
-    setStatus(triggered ? '已触发观察' : '已确认', 'ok');
-    toast(triggered ? '✅ 已确认并触发观察' : '✅ 已确认观察，晚间兜底会处理', 'success');
-  } catch(e) {
-    setStatus('确认失败', 'err');
-    toast('❌ 确认失败: ' + e.message, 'error');
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function triggerObserveWorkflow() {
-  try {
-    const r = await fetch(`https://api.github.com/repos/${OBSERVE_REPO}/actions/workflows/${OBSERVE_WORKFLOW}/dispatches`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        Accept: 'application/vnd.github+json',
-        'Content-Type': 'application/json',
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-      body: JSON.stringify({ ref: OBSERVE_REF, inputs: { observe_date: today() } }),
-    });
-    return r.status === 204;
-  } catch (e) {
-    return false;
-  }
-}
-
-function canonicalHoldingsForObserve() {
-  const rows = (holdingsData.holdings || [])
-    .filter(h => Number(h.qty) > 0)
-    .map(h => {
-      const symbol = normalizeFullSymbol(h.symbol);
-      return {
-        symbol,
-        name: h.name || ETF_POOL[symbol] || symbol,
-        qty: parseInt(h.qty) || 0,
-        cost: Number(Number(h.cost || 0).toFixed(6)),
-        buy_date: String(h.buy_date || ''),
-        _lot_id: h._lot_id || '',
-        is_reduced: !!h.is_reduced,
-      };
-    })
-    .sort((a, b) => [a.symbol, a.buy_date, a.cost, a.qty, a._lot_id].join('|').localeCompare([b.symbol, b.buy_date, b.cost, b.qty, b._lot_id].join('|')));
-  return {
-    cash_available: Number(Number(holdingsData.cash_available || 0).toFixed(2)),
-    holdings: rows,
-  };
-}
-
 function normalizeFullSymbol(raw) {
   const text = String(raw || '').trim().toLowerCase();
   const digits = text.replace(/\D/g, '');
@@ -1635,10 +1538,6 @@ function normalizeFullSymbol(raw) {
   if (/^(60|65|68|50|51|52|56|58)/.test(digits)) return 'sh' + digits;
   if (/^(00|30|15|16|18)/.test(digits)) return 'sz' + digits;
   return 'sh' + digits;
-}
-
-async function sha256Short(text) {
-  return (await sha256Hex(text)).slice(0, 16);
 }
 
 async function sha256Hex(text) {
@@ -2505,7 +2404,6 @@ function bindEvents() {
     else if (action === 'auth') doAuth();
     else if (action === 'toggle-cash') toggleCashEdit();
     else if (action === 'save-cash') saveCash();
-    else if (action === 'confirm-observation') confirmObservation();
     else if (action === 'download-holdings') downloadHoldings();
     else if (action === 'open-drawer') openDrawer();
     else if (action === 'close-drawer') closeDrawer();

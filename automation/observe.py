@@ -10,7 +10,7 @@
 X-Plan 在线量化观察任务
 
 正式运行在 GitHub Actions：
-  - 读取 Gist: holdings.json / dashboard.json / observer_request.json
+  - 读取 Gist: holdings.json / dashboard.json / execution_events_<年>.jsonl
   - 维护 Gist: trades.jsonl / portfolio_snapshots.jsonl / stats.json / observer_state.json
   - 不要求用户补填成交价、通道、原因
 
@@ -59,7 +59,6 @@ ENHANCED_ALPHA_NET = float(os.environ.get("XPLAN_ENHANCED_ALPHA_NET", "0.03"))
 
 FILE_HOLDINGS = "holdings.json"
 FILE_DASHBOARD = "dashboard.json"
-FILE_OBSERVER_REQUEST = "observer_request.json"
 FILE_TRADES = "trades.jsonl"
 FILE_SNAPSHOTS = "portfolio_snapshots.jsonl"
 FILE_STATS = "stats.json"
@@ -773,10 +772,8 @@ def diff_trades(
     state: Dict[str, Any],
     trades: List[Dict[str, Any]],
     dashboard: Dict[str, Any],
-    request: Dict[str, Any],
     quotes: Dict[str, Dict[str, Any]],
     trade_day: str,
-    request_matches_current: bool,
     current_cash_available: float = 0.0,
     previous_cash_available: float = 0.0,
     execution_decisions: Optional[List[Dict[str, Any]]] = None,
@@ -788,10 +785,10 @@ def diff_trades(
     previous_lots = state.get("last_holdings") or []
     prev_by_id = {lot.get("lot_id"): lot for lot in previous_lots}
     cur_by_id = {lot.get("lot_id"): lot for lot in current_lots}
-    request_date = request.get("date")
-    high_conf = request_matches_current and request_date == trade_day
-    base_confidence = "high" if high_conf else "medium"
-    source = "holdings_diff+observer_request" if high_conf else "holdings_diff+fallback"
+    # 成交一律由持仓 diff 推导，没有更强的证据来源，所以基线置信度是常量。
+    # 取不到成交价的那几条会在下面单独降为 "low"，这是唯一还有区分度的维度。
+    base_confidence = "medium"
+    source = "holdings_diff"
     decisions = list(execution_decisions or []) + parse_ai_decisions(dashboard)
     total_position_before_pct = estimate_total_position_pct(
         previous_lots,
@@ -1392,7 +1389,6 @@ def observe_once(files: Dict[str, str], target_day: str) -> Dict[str, str]:
     yearly_events = execution_file(year)
     holdings = parse_json(files.get(FILE_HOLDINGS, ""), {"cash_available": 0, "holdings": []})
     dashboard = parse_json(files.get(FILE_DASHBOARD, ""), {})
-    request = parse_json(files.get(FILE_OBSERVER_REQUEST, ""), {})
     state = parse_json(files.get(FILE_STATE, ""), {})
     manifest = parse_json(files.get(FILE_MANIFEST, ""), {})
     trade_shards = {
@@ -1433,11 +1429,6 @@ def observe_once(files: Dict[str, str], target_day: str) -> Dict[str, str]:
     previous_lots = state.get("last_holdings") or []
     known_lot_ids = [lot.get("lot_id") for lot in previous_lots] + [t.get("lot_id") for t in historical_trades]
     current_lots, lot_notes = assign_current_lots(canonical, previous_lots, known_lot_ids)
-    request_matches_current = (
-        request.get("holdings_hash") == current_hash
-        or request.get("holdings_canonical") == canonical
-    )
-
     symbols = [lot["symbol"] for lot in current_lots] + [lot.get("symbol") for lot in previous_lots]
     quotes = fetch_sina_quotes(symbols)
     new_trades, diff_notes = diff_trades(
@@ -1445,10 +1436,8 @@ def observe_once(files: Dict[str, str], target_day: str) -> Dict[str, str]:
         state,
         historical_trades,
         dashboard,
-        request,
         quotes,
         target_day,
-        request_matches_current,
         current_cash_available=canonical["cash_available"],
         previous_cash_available=to_float(state.get("last_cash_available"), canonical["cash_available"]),
         execution_decisions=event_decisions,
@@ -1495,8 +1484,8 @@ def observe_once(files: Dict[str, str], target_day: str) -> Dict[str, str]:
                 "is_assumption": True,
             },
         },
-        "confidence": "high" if request_matches_current else "medium",
-        "source": "observer_action" if request_matches_current else "nightly_fallback",
+        "confidence": "medium",
+        "source": "nightly",
     }
 
     historical_snapshots = upsert_snapshot(historical_snapshots, snapshot)

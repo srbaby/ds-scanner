@@ -65,12 +65,6 @@ class ObserveTests(unittest.TestCase):
                 ],
             }
         )
-        files["observer_request.json"] = j(
-            {
-                "date": "2026-07-07",
-                "holdings_canonical": observe.canonical_holdings(json.loads(files["holdings.json"])),
-            }
-        )
         files["dashboard.json"] = j(
             {
                 "methodology_version": "v3.1",
@@ -105,7 +99,9 @@ class ObserveTests(unittest.TestCase):
         trades = observe.parse_jsonl(out2["trades_2026.jsonl"])
         self.assertEqual(len(trades), 1)
         self.assertEqual(trades[0]["action"], "BUY")
-        self.assertEqual(trades[0]["confidence"], "high")
+        # 成交由持仓 diff 推导，基线恒为 medium；"low" 只留给取不到成交价的那几条
+        self.assertEqual(trades[0]["confidence"], "medium")
+        self.assertEqual(trades[0]["source"], "holdings_diff")
         self.assertEqual(trades[0]["methodology_version"], "v3.1")
         self.assertEqual(trades[0]["rule_code"], "B_INITIAL_BUY")
         self.assertEqual(trades[0]["entry_rule_code"], "B_INITIAL_BUY")
